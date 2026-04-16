@@ -1,0 +1,1614 @@
+openapi: 3.1.0
+info:
+  title: MahjongLab API
+  version: 0.1.0
+  summary: Review-first API draft for MahjongLab
+  description: |
+    This draft is aligned with the current prototype migration checklist.
+    Priority is:
+    1. Review flow
+    2. Match flow
+servers:
+  - url: http://localhost:8000
+    description: Local development
+tags:
+  - name: auth
+  - name: dashboard
+  - name: uploads
+  - name: review-jobs
+  - name: reviews
+  - name: play-config
+  - name: matches
+  - name: training
+security:
+  - BearerAuth: []
+paths:
+  /api/me:
+    get:
+      tags: [auth]
+      summary: Get current user profile
+      operationId: getMe
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/dashboard/summary:
+    get:
+      tags: [dashboard]
+      summary: Get dashboard summary for home page
+      operationId: getDashboardSummary
+      responses:
+        '200':
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/platforms/replay-sources:
+    get:
+      tags: [review-jobs]
+      summary: Get supported replay import sources
+      operationId: listReplaySources
+      responses:
+        '200':
+          description: Supported replay sources
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReplaySourceOption'
+
+  /api/uploads:
+    post:
+      tags: [uploads]
+      summary: Upload a replay file
+      operationId: uploadFile
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: Upload success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/review-jobs:
+    post:
+      tags: [review-jobs]
+      summary: Create a review job
+      operationId: createReviewJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReviewJobRequest'
+      responses:
+        '201':
+          description: Review job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/review-jobs/{task_id}:
+    get:
+      tags: [review-jobs]
+      summary: Get a review job status
+      operationId: getReviewJob
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Review job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/review-jobs/{task_id}/result:
+    get:
+      tags: [review-jobs]
+      summary: Get result mapping for a review job
+      operationId: getReviewJobResult
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Review job result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJobResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/review-jobs/{task_id}/retry:
+    post:
+      tags: [review-jobs]
+      summary: Retry a failed review job
+      operationId: retryReviewJob
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Review job re-queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJob'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reviews:
+    get:
+      tags: [reviews]
+      summary: List reviews
+      operationId: listReviews
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Q'
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [all, tenhou, majsoul, internal]
+        - name: date_range
+          in: query
+          schema:
+            type: string
+            enum: [all, today, week, month]
+      responses:
+        '200':
+          description: Review list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/reviews/{review_id}:
+    get:
+      tags: [reviews]
+      summary: Get one review summary
+      operationId: getReview
+      parameters:
+        - $ref: '#/components/parameters/ReviewId'
+      responses:
+        '200':
+          description: Review summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Review'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [reviews]
+      summary: Delete a review
+      operationId: deleteReview
+      parameters:
+        - $ref: '#/components/parameters/ReviewId'
+      responses:
+        '204':
+          description: Review deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reviews/{review_id}/entries:
+    get:
+      tags: [reviews]
+      summary: List review entries
+      operationId: listReviewEntries
+      parameters:
+        - $ref: '#/components/parameters/ReviewId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: kyoku
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+        - name: deviation_level
+          in: query
+          schema:
+            type: string
+            enum: [all, none, low, medium, high]
+        - name: decision_type
+          in: query
+          schema:
+            type: string
+            enum: [all, discard, riichi, chi, pon, kan, agari, ryukyoku, pass, other]
+      responses:
+        '200':
+          description: Review entry list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewEntryListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/reviews/{review_id}/export:
+    get:
+      tags: [reviews]
+      summary: Export a review
+      operationId: exportReview
+      parameters:
+        - $ref: '#/components/parameters/ReviewId'
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [json, html]
+      responses:
+        '200':
+          description: Export file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/play-templates:
+    get:
+      tags: [play-config]
+      summary: List playable templates
+      operationId: listPlayTemplates
+      responses:
+        '200':
+          description: Play templates
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlayTemplate'
+
+  /api/ai-profiles:
+    get:
+      tags: [play-config]
+      summary: List AI profiles
+      operationId: listAiProfiles
+      responses:
+        '200':
+          description: AI profiles
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AIProfile'
+
+  /api/matches:
+    post:
+      tags: [matches]
+      summary: Create a match
+      operationId: createMatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMatchRequest'
+      responses:
+        '201':
+          description: Match created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Match'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [matches]
+      summary: List matches
+      operationId: listMatches
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Q'
+        - name: match_type
+          in: query
+          schema:
+            type: string
+            enum: [all, tonpu, hanchan]
+        - name: difficulty
+          in: query
+          schema:
+            type: string
+            enum: [all, easy, medium, hard, mixed]
+        - name: date_range
+          in: query
+          schema:
+            type: string
+            enum: [all, today, week, month]
+      responses:
+        '200':
+          description: Match list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/matches/stats:
+    get:
+      tags: [matches]
+      summary: Get match statistics summary
+      operationId: getMatchStatsSummary
+      responses:
+        '200':
+          description: Match statistics summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchStatsSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/matches/{match_id}:
+    get:
+      tags: [matches]
+      summary: Get one match
+      operationId: getMatch
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: Match
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Match'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/state:
+    get:
+      tags: [matches]
+      summary: Get current match state snapshot
+      operationId: getMatchState
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: Match state snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchState'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/actions:
+    post:
+      tags: [matches]
+      summary: Submit a player action
+      operationId: submitMatchAction
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitMatchActionRequest'
+      responses:
+        '200':
+          description: Action accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitMatchActionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Action conflicts with current state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/matches/{match_id}/events:
+    get:
+      tags: [matches]
+      summary: Get match events incrementally
+      operationId: listMatchEvents
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+        - name: after_seq
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        '200':
+          description: Match event list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchEventListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/result:
+    get:
+      tags: [matches]
+      summary: Get match result summary
+      operationId: getMatchResult
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: Match result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/highlights:
+    get:
+      tags: [matches]
+      summary: Get match highlights
+      operationId: getMatchHighlights
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: Match highlights
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MatchHighlight'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/summary:
+    get:
+      tags: [matches]
+      summary: Get match training summary
+      operationId: getMatchTrainingSummary
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: Training summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/review-jobs:
+    post:
+      tags: [matches]
+      summary: Create or return a review job for a match
+      operationId: createMatchReviewJob
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lang:
+                  type: string
+                anonymous:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: Review job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJob'
+        '200':
+          description: Existing review job returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewJob'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/matches/{match_id}/rematch:
+    post:
+      tags: [matches]
+      summary: Create a rematch with previous match config
+      operationId: rematch
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '201':
+          description: Rematch created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Match'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/training-goals/progress:
+    get:
+      tags: [training]
+      summary: Get training goal progress
+      operationId: getTrainingGoalProgress
+      responses:
+        '200':
+          description: Training goal progress
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TrainingGoalProgress'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /ws/matches/{match_id}:
+    get:
+      tags: [matches]
+      summary: Match realtime event stream
+      description: |
+        Upgrade this endpoint to WebSocket.
+        OpenAPI does not standardize WebSocket well; this path documents the contract.
+      operationId: connectMatchWebSocket
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '101':
+          description: Switching Protocols
+      x-websocket-messages:
+        outbound:
+          - $ref: '#/components/schemas/MatchSocketEvent'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ReviewId:
+      name: review_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MatchId:
+      name: match_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Q:
+      name: q
+      in: query
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    UserProfile:
+      type: object
+      required: [id, display_name, locale, timezone, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          nullable: true
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+          nullable: true
+        locale:
+          type: string
+        timezone:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DashboardSummary:
+      type: object
+      required:
+        - review_count
+        - match_count
+        - mistake_count
+        - recent_reviews
+        - recent_matches
+      properties:
+        review_count:
+          type: integer
+        match_count:
+          type: integer
+        mistake_count:
+          type: integer
+        recent_reviews:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewListItem'
+        recent_matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchListItem'
+
+    ReplaySourceOption:
+      type: object
+      required: [platform, supported_source_types]
+      properties:
+        platform:
+          type: string
+          enum: [tenhou, majsoul, internal]
+        supported_source_types:
+          type: array
+          items:
+            type: string
+            enum: [link, id, file, json]
+
+    UploadResponse:
+      type: object
+      required: [file_key, original_filename, content_type, size]
+      properties:
+        file_key:
+          type: string
+        original_filename:
+          type: string
+        content_type:
+          type: string
+        size:
+          type: integer
+
+    CreateReviewJobRequest:
+      type: object
+      required: [source_type, source]
+      properties:
+        source_type:
+          type: string
+          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_json]
+        platform:
+          type: string
+          nullable: true
+          enum: [tenhou, majsoul, internal, null]
+        source:
+          type: object
+          additionalProperties: true
+          description: |
+            Source payload. Example:
+            - {"url":"https://..."}
+            - {"external_id":"..."}
+            - {"file_key":"uploads/..."}
+            - {"events":[...]}
+        target_player_ref:
+          type: string
+          nullable: true
+        kyoku_filter:
+          type: string
+          default: all
+        lang:
+          type: string
+          default: zh-CN
+        anonymous:
+          type: boolean
+          default: false
+        output_format:
+          type: string
+          enum: [json, html, both]
+          default: json
+
+    ReviewJob:
+      type: object
+      required:
+        - id
+        - status
+        - progress
+        - step
+        - source_type
+        - source
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        match_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+          enum: [created, parsing, queued, analyzing, completed, failed, cancelled]
+        progress:
+          type: integer
+          minimum: 0
+          maximum: 100
+        step:
+          type: string
+        source_type:
+          type: string
+          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_json]
+        platform:
+          type: string
+          nullable: true
+        source:
+          type: object
+          additionalProperties: true
+        target_player_ref:
+          type: string
+          nullable: true
+        target_actor:
+          type: integer
+          minimum: 0
+          maximum: 3
+          nullable: true
+        review_id:
+          type: string
+          format: uuid
+          nullable: true
+        error_code:
+          type: string
+          nullable: true
+        error_message:
+          type: string
+          nullable: true
+        attempt_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        queued_at:
+          type: string
+          format: date-time
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ReviewJobResult:
+      type: object
+      required: [task_id, status]
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, parsing, queued, analyzing, completed, failed, cancelled]
+        review_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    Review:
+      type: object
+      required:
+        - id
+        - job_id
+        - user_id
+        - target_actor
+        - engine_name
+        - engine_version
+        - reviewed_decision_count
+        - match_decision_count
+        - high_deviation_count
+        - medium_deviation_count
+        - optimal_count
+        - summary
+        - stats
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        job_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        match_id:
+          type: string
+          format: uuid
+          nullable: true
+        platform:
+          type: string
+          nullable: true
+        target_actor:
+          type: integer
+          minimum: 0
+          maximum: 3
+        target_player_label:
+          type: string
+          nullable: true
+        engine_name:
+          type: string
+        engine_version:
+          type: string
+        model_tag:
+          type: string
+          nullable: true
+        lang:
+          type: string
+        reviewed_decision_count:
+          type: integer
+        match_decision_count:
+          type: integer
+        high_deviation_count:
+          type: integer
+        medium_deviation_count:
+          type: integer
+        optimal_count:
+          type: integer
+        rating:
+          type: number
+          nullable: true
+        temperature:
+          type: number
+          nullable: true
+        summary:
+          type: object
+          additionalProperties: true
+        stats:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    ReviewListItem:
+      allOf:
+        - $ref: '#/components/schemas/Review'
+
+    ReviewListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewListItem'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    ReviewEntry:
+      type: object
+      required:
+        - id
+        - review_id
+        - seq
+        - kyoku_index
+        - honba
+        - junme
+        - tiles_left
+        - decision_type
+        - actual_action
+        - expected_action
+        - is_match
+        - deviation_level
+        - details
+      properties:
+        id:
+          type: integer
+          format: int64
+        review_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+        kyoku_index:
+          type: integer
+        honba:
+          type: integer
+        junme:
+          type: integer
+        tiles_left:
+          type: integer
+        last_actor:
+          type: integer
+          minimum: 0
+          maximum: 3
+          nullable: true
+        tile:
+          type: string
+          nullable: true
+        decision_type:
+          type: string
+          enum: [discard, riichi, chi, pon, kan, agari, ryukyoku, pass, other]
+        actual_action:
+          type: object
+          additionalProperties: true
+        expected_action:
+          type: object
+          additionalProperties: true
+        is_match:
+          type: boolean
+        deviation_level:
+          type: string
+          enum: [none, low, medium, high]
+        delta_score:
+          type: integer
+          nullable: true
+        shanten:
+          type: integer
+          nullable: true
+        at_furiten:
+          type: boolean
+          nullable: true
+        details:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        state_snapshot:
+          type: object
+          additionalProperties: true
+          nullable: true
+        tags:
+          type: array
+          items:
+            type: string
+
+    ReviewEntryListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReviewEntry'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    PlayTemplate:
+      type: object
+      required: [id, name, match_type, rule_config, ai_config]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        match_type:
+          type: string
+          enum: [tonpu, hanchan]
+        rule_config:
+          type: object
+          additionalProperties: true
+        ai_config:
+          type: object
+          additionalProperties: true
+
+    AIProfile:
+      type: object
+      required: [id, name, difficulty, config]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        difficulty:
+          type: string
+          enum: [easy, medium, hard, mixed]
+        description:
+          type: string
+          nullable: true
+        config:
+          type: object
+          additionalProperties: true
+
+    CreateMatchRequest:
+      type: object
+      properties:
+        template_id:
+          type: string
+          nullable: true
+        rule_config:
+          type: object
+          additionalProperties: true
+        ai_config:
+          type: object
+          additionalProperties: true
+      required: [ai_config]
+
+    MatchSeat:
+      type: object
+      required: [seat, kind, label]
+      properties:
+        seat:
+          type: integer
+          minimum: 0
+          maximum: 3
+        kind:
+          type: string
+          enum: [user, ai]
+        label:
+          type: string
+        score:
+          type: integer
+          nullable: true
+
+    Match:
+      type: object
+      required:
+        - id
+        - user_id
+        - status
+        - source_type
+        - match_type
+        - rule_config
+        - ai_config
+        - seat_config
+        - scores
+        - last_event_seq
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, waiting, in_progress, finished, aborted, failed]
+        source_type:
+          type: string
+        match_type:
+          type: string
+          enum: [tonpu, hanchan]
+        rule_config:
+          type: object
+          additionalProperties: true
+        ai_config:
+          type: object
+          additionalProperties: true
+        seat_config:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSeat'
+        current_kyoku_index:
+          type: integer
+          nullable: true
+        current_honba:
+          type: integer
+          nullable: true
+        kyotaku:
+          type: integer
+        scores:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: integer
+        dora_indicators:
+          type: array
+          items:
+            type: string
+        last_event_seq:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    MatchPlayerView:
+      type: object
+      required: [seat, label, kind, score]
+      properties:
+        seat:
+          type: integer
+        label:
+          type: string
+        kind:
+          type: string
+          enum: [user, ai]
+        score:
+          type: integer
+        status:
+          type: string
+          nullable: true
+
+    MatchRiver:
+      type: object
+      required: [seat, tiles]
+      properties:
+        seat:
+          type: integer
+        tiles:
+          type: array
+          items:
+            type: string
+
+    MatchState:
+      type: object
+      required:
+        - match_id
+        - status
+        - phase
+        - players
+        - legal_actions
+        - last_event_seq
+      properties:
+        match_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [created, waiting, in_progress, finished, aborted, failed]
+        phase:
+          type: string
+        kyoku_label:
+          type: string
+          nullable: true
+        current_turn:
+          type: integer
+          nullable: true
+        countdown_sec:
+          type: integer
+          nullable: true
+        dora_indicators:
+          type: array
+          items:
+            type: string
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchPlayerView'
+        player_hand:
+          type: array
+          items:
+            type: string
+        drawn_tile:
+          type: string
+          nullable: true
+        rivers:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchRiver'
+        melds:
+          type: object
+          additionalProperties: true
+        legal_actions:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        last_event_seq:
+          type: integer
+
+    SubmitMatchActionRequest:
+      type: object
+      required: [action_type]
+      properties:
+        action_type:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+
+    SubmitMatchActionResponse:
+      type: object
+      required: [accepted, last_event_seq]
+      properties:
+        accepted:
+          type: boolean
+        last_event_seq:
+          type: integer
+        message:
+          type: string
+          nullable: true
+
+    MatchEvent:
+      type: object
+      required: [seq, event_type, source, payload, created_at]
+      properties:
+        seq:
+          type: integer
+        event_type:
+          type: string
+        kyoku_index:
+          type: integer
+          nullable: true
+        honba:
+          type: integer
+          nullable: true
+        actor:
+          type: integer
+          nullable: true
+        source:
+          type: string
+          enum: [user, ai, server]
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    MatchEventListResponse:
+      type: object
+      required: [items, next_after_seq]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchEvent'
+        next_after_seq:
+          type: integer
+
+    MatchStats:
+      type: object
+      additionalProperties: true
+
+    MatchHighlight:
+      type: object
+      required: [kyoku_label, event, description, impact]
+      properties:
+        kyoku_label:
+          type: string
+        event:
+          type: string
+        description:
+          type: string
+        impact:
+          type: string
+
+    TrainingSummary:
+      type: object
+      required: [good_points, improvement_points]
+      properties:
+        good_points:
+          type: array
+          items:
+            type: string
+        improvement_points:
+          type: array
+          items:
+            type: string
+
+    MatchResult:
+      type: object
+      required:
+        - match_id
+        - user_rank
+        - rankings
+        - final_scores
+        - score_deltas
+        - stats
+        - highlights
+        - training_summary
+        - finished_at
+      properties:
+        match_id:
+          type: string
+          format: uuid
+        user_rank:
+          type: integer
+        rankings:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchSeat'
+        final_scores:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: integer
+        score_deltas:
+          type: array
+          minItems: 4
+          maxItems: 4
+          items:
+            type: integer
+        stats:
+          $ref: '#/components/schemas/MatchStats'
+        highlights:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchHighlight'
+        training_summary:
+          $ref: '#/components/schemas/TrainingSummary'
+        review_job_id:
+          type: string
+          format: uuid
+          nullable: true
+        review_status:
+          type: string
+          enum: [created, parsing, queued, analyzing, completed, failed, cancelled]
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+
+    MatchListItem:
+      type: object
+      required:
+        - id
+        - created_at
+        - match_type
+        - difficulty
+        - user_rank
+        - user_delta
+      properties:
+        id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        match_type:
+          type: string
+          enum: [tonpu, hanchan]
+        difficulty:
+          type: string
+        training_goal:
+          type: string
+          nullable: true
+        user_rank:
+          type: integer
+        user_delta:
+          type: integer
+        review_job_id:
+          type: string
+          format: uuid
+          nullable: true
+
+    MatchListResponse:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatchListItem'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    MatchStatsSummary:
+      type: object
+      required: [total_matches, first_place_count, avg_rank, win_rate]
+      properties:
+        total_matches:
+          type: integer
+        first_place_count:
+          type: integer
+        avg_rank:
+          type: number
+        win_rate:
+          type: number
+
+    TrainingGoalProgress:
+      type: object
+      required: [goal_key, label, completed, target, percent]
+      properties:
+        goal_key:
+          type: string
+        label:
+          type: string
+        completed:
+          type: integer
+        target:
+          type: integer
+        percent:
+          type: number
+
+    MatchSocketEvent:
+      type: object
+      required: [type, match_id, payload]
+      properties:
+        type:
+          type: string
+          enum:
+            - match_snapshot
+            - state_updated
+            - legal_actions
+            - turn_started
+            - ai_thinking
+            - action_committed
+            - kyoku_finished
+            - match_finished
+            - error
+        match_id:
+          type: string
+          format: uuid
+        seq:
+          type: integer
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true

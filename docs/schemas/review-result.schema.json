@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mahjonglab.local/schemas/review-result.schema.json",
+  "title": "ReviewResultV1",
+  "type": "object",
+  "required": [
+    "id",
+    "job_id",
+    "target_actor",
+    "engine_name",
+    "engine_version",
+    "summary",
+    "entries",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "match_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "platform": {
+      "type": ["string", "null"]
+    },
+    "target_actor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "target_player_label": {
+      "type": ["string", "null"]
+    },
+    "engine_name": {
+      "type": "string"
+    },
+    "engine_version": {
+      "type": "string"
+    },
+    "model_tag": {
+      "type": ["string", "null"]
+    },
+    "rating": {
+      "type": ["number", "null"]
+    },
+    "temperature": {
+      "type": ["number", "null"]
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "reviewed_decision_count",
+        "match_decision_count",
+        "high_deviation_count",
+        "medium_deviation_count",
+        "optimal_count"
+      ],
+      "properties": {
+        "reviewed_decision_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "match_decision_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high_deviation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medium_deviation_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "optimal_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "seq",
+          "kyoku_index",
+          "honba",
+          "junme",
+          "tiles_left",
+          "decision_type",
+          "actual_action",
+          "expected_action",
+          "is_match",
+          "deviation_level",
+          "details"
+        ],
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kyoku_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "honba": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "junme": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tiles_left": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_actor": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "maximum": 3
+          },
+          "tile": {
+            "type": ["string", "null"]
+          },
+          "decision_type": {
+            "type": "string",
+            "enum": [
+              "discard",
+              "riichi",
+              "chi",
+              "pon",
+              "kan",
+              "agari",
+              "ryukyoku",
+              "pass",
+              "other"
+            ]
+          },
+          "actual_action": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "expected_action": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "is_match": {
+            "type": "boolean"
+          },
+          "deviation_level": {
+            "type": "string",
+            "enum": ["none", "low", "medium", "high"]
+          },
+          "delta_score": {
+            "type": ["integer", "null"]
+          },
+          "shanten": {
+            "type": ["integer", "null"]
+          },
+          "at_furiten": {
+            "type": ["boolean", "null"]
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "state_snapshot": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: mahjonglab-postgres
+    environment:
+      POSTGRES_DB: mahjonglab
+      POSTGRES_USER: mahjonglab
+      POSTGRES_PASSWORD: mahjonglab
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mahjonglab -d mahjonglab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: mahjonglab-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: mahjonglab-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: mahjonglab
+      MINIO_ROOT_PASSWORD: mahjonglab123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

@@ -1,0 +1,38 @@
+# Reference repositories managed outside the main repo
+/Mortal/
+/mjai.app/
+/mjai-reviewer/
+/原型设计/
+
+# Node / frontend
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/coverage/
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+*.pyc
+*.pyo
+
+# Rust / Cargo
+**/target/
+
+# Local runtime data
+/services/api/data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
