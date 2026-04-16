@@ -18,6 +18,7 @@ export interface DashboardSummary {
   review_count: number;
   completed_job_count: number;
   failed_job_count: number;
+  mistake_count: number;
 }
 
 export interface ReplaySourceOption {
@@ -132,6 +133,36 @@ export interface PaginatedReviews {
 
 export interface PaginatedReviewEntries {
   items: ReviewEntry[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface MistakeItem {
+  id: string;
+  review_id: string;
+  review_entry_id: number;
+  platform?: string | null;
+  target_actor: number;
+  target_player_label?: string | null;
+  entry_seq: number;
+  kyoku_index: number;
+  honba: number;
+  junme: number;
+  decision_type: string;
+  deviation_level: string;
+  category: string;
+  note?: string | null;
+  tags: string[];
+  actual_action?: Record<string, unknown> | null;
+  expected_action: Record<string, unknown>;
+  state_snapshot: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaginatedMistakeItems {
+  items: MistakeItem[];
   page: number;
   page_size: number;
   total: number;

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FileJson, Hash, Link as LinkIcon, Upload } from "lucide-react";
+import { ArrowLeft, Download, FileJson, Hash, Link as LinkIcon, Upload } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Textarea } from "../../components/ui/textarea";
 
-type ImportType = "link" | "id" | "file" | "json";
+type ImportType = "link" | "id" | "majsoul" | "file" | "json";
 
 function normalizeInlineJson(value: string) {
   const trimmed = value.trim();
@@ -49,12 +49,15 @@ export function ReviewImport() {
   const queryClient = useQueryClient();
 
   const [importType, setImportType] = useState<ImportType>("file");
-  const [selectedPlayer, setSelectedPlayer] = useState("0");
+  const [selectedPlayer, setSelectedPlayer] = useState("auto");
   const [language, setLanguage] = useState("zh-CN");
   const [outputFormat, setOutputFormat] = useState("json");
   const [anonymous, setAnonymous] = useState(false);
+  const [tenhouUrl, setTenhouUrl] = useState("");
+  const [tenhouId, setTenhouId] = useState("");
   const [jsonContent, setJsonContent] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [majsoulFile, setMajsoulFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sourcesQuery = useQuery({
@@ -70,6 +73,10 @@ export function ReviewImport() {
     () => new Set((sourcesQuery.data ?? []).filter((item) => item.enabled).map((item) => item.key)),
     [sourcesQuery.data],
   );
+  const enabledSourceLabels = useMemo(
+    () => (sourcesQuery.data ?? []).filter((item) => item.enabled).map((item) => item.label),
+    [sourcesQuery.data],
+  );
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -78,6 +85,39 @@ export function ReviewImport() {
         output_format: outputFormat,
         anonymous,
       };
+      const targetPlayerRef = selectedPlayer === "auto" ? undefined : selectedPlayer;
+
+      if (importType === "link") {
+        if (!enabledSources.has("tenhou_url")) {
+          throw new Error("所选导入方式暂不可用。");
+        }
+        if (!tenhouUrl.trim()) {
+          throw new Error("请输入天凤牌谱链接。");
+        }
+        return createReviewJob({
+          source_type: "tenhou_url",
+          platform: "tenhou",
+          source: { url: tenhouUrl.trim() },
+          options,
+          target_player_ref: targetPlayerRef,
+        });
+      }
+
+      if (importType === "id") {
+        if (!enabledSources.has("tenhou_id")) {
+          throw new Error("所选导入方式暂不可用。");
+        }
+        if (!tenhouId.trim()) {
+          throw new Error("请输入天凤对局 ID。");
+        }
+        return createReviewJob({
+          source_type: "tenhou_id",
+          platform: "tenhou",
+          source: { id: tenhouId.trim() },
+          options,
+          target_player_ref: targetPlayerRef,
+        });
+      }
 
       if (importType === "file") {
         if (!selectedFile) {
@@ -87,6 +127,26 @@ export function ReviewImport() {
         return createReviewJob({
           source_type: "upload_file",
           platform: "internal",
+          source: { file_key: upload.file_key },
+          options,
+          target_player_ref: targetPlayerRef,
+        });
+      }
+
+      if (importType === "majsoul") {
+        if (!enabledSources.has("majsoul_file")) {
+          throw new Error("所选导入方式暂不可用。");
+        }
+        if (!majsoulFile) {
+          throw new Error("请先选择雀魂导出文件。");
+        }
+        if (selectedPlayer === "auto") {
+          throw new Error("雀魂导出文件需要明确目标玩家座位。");
+        }
+        const upload = await uploadReplayFile(majsoulFile);
+        return createReviewJob({
+          source_type: "majsoul_file",
+          platform: "majsoul",
           source: { file_key: upload.file_key },
           options,
           target_player_ref: selectedPlayer,
@@ -100,11 +160,11 @@ export function ReviewImport() {
           platform: "internal",
           source,
           options,
-          target_player_ref: selectedPlayer,
+          target_player_ref: targetPlayerRef,
         });
       }
 
-      throw new Error("当前阶段只开放文件上传和 JSON 复盘入口。");
+      throw new Error("不支持的导入方式。");
     },
     onSuccess: async (job) => {
       await Promise.all([
@@ -153,12 +213,12 @@ export function ReviewImport() {
           <Card>
             <CardHeader>
               <CardTitle>导入牌谱</CardTitle>
-              <CardDescription>阶段 2 已接通真实后端，当前可用入口是“文件”和“JSON”。</CardDescription>
+              <CardDescription>支持天凤链接、天凤 ID、雀魂导出文件、`mjai` 文件和 JSON 导入。</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <Tabs value={importType} onValueChange={(value) => setImportType(value as ImportType)}>
-                  <TabsList className="grid w-full grid-cols-4">
+                  <TabsList className="grid w-full grid-cols-5">
                     <TabsTrigger value="link">
                       <LinkIcon className="mr-2 h-4 w-4" />
                       链接
@@ -166,6 +226,10 @@ export function ReviewImport() {
                     <TabsTrigger value="id">
                       <Hash className="mr-2 h-4 w-4" />
                       ID
+                    </TabsTrigger>
+                    <TabsTrigger value="majsoul">
+                      <Download className="mr-2 h-4 w-4" />
+                      雀魂
                     </TabsTrigger>
                     <TabsTrigger value="file">
                       <Upload className="mr-2 h-4 w-4" />
@@ -178,22 +242,66 @@ export function ReviewImport() {
                   </TabsList>
 
                   <TabsContent value="link" className="space-y-4">
-                    <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                      当前后端尚未接入 `Tenhou / Majsoul` 外部牌谱适配。这个入口会在后续阶段开放。
-                    </div>
                     <div>
-                      <Label htmlFor="link">牌谱链接</Label>
-                      <Input id="link" placeholder="https://..." className="mt-2" disabled />
+                      <Label htmlFor="link">天凤牌谱链接</Label>
+                      <Input
+                        id="link"
+                        placeholder="https://tenhou.net/0/?log=...&tw=2"
+                        className="mt-2"
+                        value={tenhouUrl}
+                        onChange={(event) => setTenhouUrl(event.target.value)}
+                      />
+                      <p className="mt-2 text-sm text-slate-500">
+                        支持直接粘贴天凤牌谱链接；如果链接里包含 `tw`，可自动识别目标玩家。
+                      </p>
                     </div>
                   </TabsContent>
 
                   <TabsContent value="id" className="space-y-4">
-                    <div className="rounded-lg border border-dashed border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                      当前后端尚未接入外部平台牌谱 ID 解析。阶段 2 只演示文件和 JSON 复盘链路。
-                    </div>
                     <div>
-                      <Label htmlFor="gameId">对局 ID</Label>
-                      <Input id="gameId" placeholder="输入对局 ID" className="mt-2" disabled />
+                      <Label htmlFor="gameId">天凤对局 ID</Label>
+                      <Input
+                        id="gameId"
+                        placeholder="2019050417gm-0029-0000-4f2a8622"
+                        className="mt-2"
+                        value={tenhouId}
+                        onChange={(event) => setTenhouId(event.target.value)}
+                      />
+                      <p className="mt-2 text-sm text-slate-500">输入天凤对局 ID 后即可直接创建复盘任务。</p>
+                    </div>
+                  </TabsContent>
+
+                  <TabsContent value="majsoul" className="space-y-4">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
+                      <div className="flex items-start gap-3">
+                        <div className="rounded-lg bg-white p-3 shadow-sm">
+                          <Download className="h-6 w-6 text-slate-600" />
+                        </div>
+                        <div className="flex-1 space-y-3">
+                          <div>
+                            <Label htmlFor="majsoul-file">雀魂导出文件</Label>
+                            <Input
+                              id="majsoul-file"
+                              type="file"
+                              className="mt-2"
+                              onChange={(event) => setMajsoulFile(event.target.files?.[0] ?? null)}
+                            />
+                          </div>
+                          <p className="text-sm text-slate-500">
+                            当前支持上传通过浏览器脚本或 Majsoul+ “Save logs” 导出的对局文件，再由后端转换为 `mjai`。
+                          </p>
+                          <p className="text-sm text-amber-700">
+                            这个入口需要你明确选择目标玩家座位，不能自动识别。
+                          </p>
+                          {majsoulFile && (
+                            <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                              已选择：
+                              <span className="ml-2 font-semibold text-slate-900">{majsoulFile.name}</span>
+                              <span className="ml-2 text-slate-500">{formatRelativeSize(majsoulFile.size)}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </TabsContent>
 
@@ -214,7 +322,7 @@ export function ReviewImport() {
                             />
                           </div>
                           <p className="text-sm text-slate-500">
-                            当前推荐上传平台内导出的 `mjai` JSON / JSONL 文件。
+                            当前推荐上传平台内导出的 `mjai` JSON / JSONL 文件，或其他已经标准化的 `mjai` 事件文件。
                           </p>
                           {selectedFile && (
                             <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
@@ -253,12 +361,16 @@ export function ReviewImport() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="auto">自动识别</SelectItem>
                         <SelectItem value="0">玩家 0</SelectItem>
                         <SelectItem value="1">玩家 1</SelectItem>
                         <SelectItem value="2">玩家 2</SelectItem>
                         <SelectItem value="3">玩家 3</SelectItem>
                       </SelectContent>
                     </Select>
+                    {importType === "majsoul" && (
+                      <p className="mt-2 text-sm text-amber-700">雀魂导出文件必须手动指定目标玩家座位。</p>
+                    )}
                   </div>
 
                   <div>
@@ -312,7 +424,7 @@ export function ReviewImport() {
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
                   已接入后端来源：
                   <span className="ml-2 font-semibold text-slate-900">
-                    {Array.from(enabledSources).join(" / ") || "加载中"}
+                    {enabledSourceLabels.join(" / ") || "加载中"}
                   </span>
                 </div>
 
@@ -321,7 +433,7 @@ export function ReviewImport() {
                     type="submit"
                     className="flex-1"
                     size="lg"
-                    disabled={createMutation.isPending || (importType !== "file" && importType !== "json")}
+                    disabled={createMutation.isPending}
                   >
                     {createMutation.isPending ? "正在创建任务..." : "创建复盘任务"}
                   </Button>

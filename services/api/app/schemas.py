@@ -16,6 +16,7 @@ class DashboardSummary(BaseModel):
     review_count: int
     completed_job_count: int
     failed_job_count: int
+    mistake_count: int
 
 
 class ReplaySourceOption(BaseModel):
@@ -121,6 +122,35 @@ class ReviewEntryOut(BaseModel):
     created_at: datetime
 
 
+class CreateMistakeItemRequest(BaseModel):
+    review_entry_id: int
+    note: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class MistakeItemOut(BaseModel):
+    id: str
+    review_id: str
+    review_entry_id: int
+    platform: str | None = None
+    target_actor: int
+    target_player_label: str | None = None
+    entry_seq: int
+    kyoku_index: int
+    honba: int
+    junme: int
+    decision_type: str
+    deviation_level: str
+    category: str
+    note: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    actual_action: dict[str, Any] | None = None
+    expected_action: dict[str, Any] = Field(default_factory=dict)
+    state_snapshot: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
 class PaginatedReviews(BaseModel):
     items: list[ReviewOut]
     page: int
@@ -130,6 +160,13 @@ class PaginatedReviews(BaseModel):
 
 class PaginatedReviewEntries(BaseModel):
     items: list[ReviewEntryOut]
+    page: int
+    page_size: int
+    total: int
+
+
+class PaginatedMistakeItems(BaseModel):
+    items: list[MistakeItemOut]
     page: int
     page_size: int
     total: int

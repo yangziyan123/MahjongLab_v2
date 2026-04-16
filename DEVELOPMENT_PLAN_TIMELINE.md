@@ -383,6 +383,23 @@
 - 用户能把复盘巡目加入错题库
 - 用户能从错题库重新进入对应复盘点
 
+### 阶段 3 实施注记（2026-04-16）
+
+- 当前阶段 3 已按“导入 + 训练入口”口径完成
+- 已实装：
+  - `review_engine` 接通 `tenhou_url / tenhou_id`
+  - `Tenhou URL` 解析、原始牌谱下载、`mjai` 标准化转换
+  - `Majsoul` 导出文件导入，并统一转换到 `mjai`
+  - `raw_input_object_key / normalized_mjai_object_key` 持久化
+  - 导入页开放 `Tenhou` 链接 / ID、`Majsoul` 导出文件、`mjai` 文件和 JSON 入口
+  - 后端错误信息可直接回传到任务和前端提示
+  - 复盘摘要增加总失误、大失误、立直判断、鸣牌判断、防守失误统计
+  - 错题库数据表、API、报告页入口和错题库列表页
+- 当前未实装：
+  - `Majsoul URL` 直连抓取
+- 阶段 3 当前验收结果见：
+  - [docs/acceptance/PHASE_3_ACCEPTANCE.md](/d:/Code/MahjongLab/MahjongLab/docs/acceptance/PHASE_3_ACCEPTANCE.md)
+
 ## 8. 阶段 4：复盘链路加固（第 8 周）
 
 ### 目标

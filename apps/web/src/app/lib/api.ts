@@ -1,15 +1,21 @@
 import type {
   CreateReviewJobRequest,
   DashboardSummary,
+  MistakeItem,
+  PaginatedMistakeItems,
   PaginatedReviewEntries,
   PaginatedReviews,
   ReplaySourceOption,
   Review,
+  ReviewEntry,
   ReviewJob,
   ReviewJobResult,
   UploadResponse,
   UserProfile,
 } from "./types";
+
+const REVIEW_ENTRY_PAGE_SIZE = 200;
+const MISTAKE_PAGE_SIZE = 100;
 
 export class ApiError extends Error {
   status: number;
@@ -133,8 +139,86 @@ export function listReviewEntries(params: {
   );
 }
 
+export async function listAllReviewEntries(params: {
+  reviewId: string;
+  kyoku?: number;
+  deviation_level?: string;
+  decision_type?: string;
+}) {
+  const items: ReviewEntry[] = [];
+  let page = 1;
+
+  while (true) {
+    const response = await listReviewEntries({
+      ...params,
+      page,
+      page_size: REVIEW_ENTRY_PAGE_SIZE,
+    });
+    items.push(...response.items);
+
+    if (items.length >= response.total || response.items.length === 0) {
+      return items;
+    }
+
+    page += 1;
+  }
+}
+
 export function deleteReview(reviewId: string) {
   return apiRequest<void>(`/api/reviews/${reviewId}`, {
+    method: "DELETE",
+  });
+}
+
+export function createMistakeItem(reviewId: string, payload: {
+  review_entry_id: number;
+  note?: string | null;
+  tags?: string[];
+}) {
+  return apiRequest<MistakeItem>(`/api/reviews/${reviewId}/mistakes`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listMistakes(params: {
+  q?: string;
+  review_id?: string;
+  category?: string;
+  decision_type?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  return apiRequest<PaginatedMistakeItems>(`/api/mistakes${buildQuery(params)}`);
+}
+
+export async function listAllMistakes(params: {
+  q?: string;
+  review_id?: string;
+  category?: string;
+  decision_type?: string;
+}) {
+  const items: MistakeItem[] = [];
+  let page = 1;
+
+  while (true) {
+    const response = await listMistakes({
+      ...params,
+      page,
+      page_size: MISTAKE_PAGE_SIZE,
+    });
+    items.push(...response.items);
+
+    if (items.length >= response.total || response.items.length === 0) {
+      return items;
+    }
+
+    page += 1;
+  }
+}
+
+export function deleteMistakeItem(mistakeId: string) {
+  return apiRequest<void>(`/api/mistakes/${mistakeId}`, {
     method: "DELETE",
   });
 }

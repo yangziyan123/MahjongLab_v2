@@ -1,17 +1,20 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
   ArrowRightCircle,
+  BookmarkCheck,
+  BookmarkPlus,
   CheckCircle2,
   Clock3,
   Layers3,
   TrendingDown,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 
-import { getReview, listReviewEntries } from "../../lib/api";
+import { createMistakeItem, deleteMistakeItem, getReview, listAllMistakes, listAllReviewEntries } from "../../lib/api";
 import { formatDateTime, formatDecisionType, formatKyokuLabel, formatPlatform } from "../../lib/format";
 import { useReviewReportStore } from "../../store/review-report";
 import type { ReviewEntry } from "../../lib/types";
@@ -66,8 +69,24 @@ function getDeviationBadge(entry: ReviewEntry) {
   return <Badge variant="outline">中偏差</Badge>;
 }
 
+function formatTrainingTag(tag: string) {
+  const mapping: Record<string, string> = {
+    defense: "防守",
+    riichi_judgment: "立直判断",
+    call_judgment: "鸣牌判断",
+    efficiency: "牌效率",
+    attack: "进攻",
+    chi_judgment: "吃牌",
+    pon_judgment: "碰牌",
+    kan_judgment: "杠牌",
+  };
+  return mapping[tag] || tag;
+}
+
 export function ReviewReport() {
   const { reportId = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const {
     kyoku,
     deviationLevel,
@@ -79,10 +98,14 @@ export function ReviewReport() {
     setSelectedEntryId,
     reset,
   } = useReviewReportStore();
+  const entryFromQuery = Number(searchParams.get("entry") ?? "");
 
   useEffect(() => {
     reset();
-  }, [reportId, reset]);
+    if (Number.isInteger(entryFromQuery) && entryFromQuery > 0) {
+      setSelectedEntryId(entryFromQuery);
+    }
+  }, [entryFromQuery, reportId, reset, setSelectedEntryId]);
 
   const reviewQuery = useQuery({
     queryKey: ["review", reportId],
@@ -92,31 +115,54 @@ export function ReviewReport() {
 
   const allEntriesQuery = useQuery({
     queryKey: ["review-entries-all", reportId],
-    queryFn: () =>
-      listReviewEntries({
-        reviewId: reportId,
-        page: 1,
-        page_size: 500,
-      }),
+    queryFn: () => listAllReviewEntries({ reviewId: reportId }),
     enabled: Boolean(reportId),
   });
 
   const filteredEntriesQuery = useQuery({
     queryKey: ["review-entries", reportId, kyoku, deviationLevel, decisionType],
     queryFn: () =>
-      listReviewEntries({
+      listAllReviewEntries({
         reviewId: reportId,
         kyoku: kyoku === "all" ? undefined : Number(kyoku),
         deviation_level: deviationLevel === "all" ? undefined : deviationLevel,
         decision_type: decisionType === "all" ? undefined : decisionType,
-        page: 1,
-        page_size: 500,
       }),
     enabled: Boolean(reportId),
   });
+  const mistakeItemsQuery = useQuery({
+    queryKey: ["review-mistakes", reportId],
+    queryFn: () => listAllMistakes({ review_id: reportId }),
+    enabled: Boolean(reportId),
+  });
 
-  const allEntries = allEntriesQuery.data?.items ?? [];
-  const filteredEntries = filteredEntriesQuery.data?.items ?? [];
+  const addMistakeMutation = useMutation({
+    mutationFn: (entryId: number) => createMistakeItem(reportId, { review_entry_id: entryId }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["review-mistakes", reportId] }),
+        queryClient.invalidateQueries({ queryKey: ["mistakes"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
+      ]);
+    },
+  });
+  const removeMistakeMutation = useMutation({
+    mutationFn: (mistakeId: string) => deleteMistakeItem(mistakeId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["review-mistakes", reportId] }),
+        queryClient.invalidateQueries({ queryKey: ["mistakes"] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
+      ]);
+    },
+  });
+
+  const allEntries = allEntriesQuery.data ?? [];
+  const filteredEntries = filteredEntriesQuery.data ?? [];
+  const mistakeByEntryId = useMemo(
+    () => new Map((mistakeItemsQuery.data ?? []).map((item) => [item.review_entry_id, item])),
+    [mistakeItemsQuery.data],
+  );
 
   useEffect(() => {
     if (filteredEntries.length === 0) {
@@ -134,6 +180,7 @@ export function ReviewReport() {
   }, [filteredEntries, selectedEntryId, setSelectedEntryId]);
 
   const selectedEntry = filteredEntries.find((entry) => entry.id === selectedEntryId) ?? filteredEntries[0] ?? null;
+  const selectedMistakeItem = selectedEntry ? mistakeByEntryId.get(selectedEntry.id) ?? null : null;
 
   const kyokuOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -181,7 +228,47 @@ export function ReviewReport() {
     );
   }
 
+  if (allEntriesQuery.isError || filteredEntriesQuery.isError) {
+    const detail =
+      allEntriesQuery.error instanceof Error
+        ? allEntriesQuery.error.message
+        : filteredEntriesQuery.error instanceof Error
+          ? filteredEntriesQuery.error.message
+          : "Failed to load review entries.";
+
+    return (
+      <div className="min-h-screen bg-slate-50">
+        <header className="border-b bg-white shadow-sm">
+          <div className="container mx-auto flex items-center px-4 py-4">
+            <Link to="/review/history">
+              <Button variant="ghost" size="sm">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                杩斿洖鍘嗗彶
+              </Button>
+            </Link>
+            <h1 className="ml-4 text-2xl font-bold text-slate-900">澶嶇洏鎶ュ憡</h1>
+          </div>
+        </header>
+        <main className="container mx-auto px-4 py-8">
+          <Card>
+            <CardContent className="py-12 text-center text-red-600">{detail}</CardContent>
+          </Card>
+        </main>
+      </div>
+    );
+  }
+
   const review = reviewQuery.data;
+  const summary = review.summary ?? {};
+  const mistakeCount =
+    typeof summary.mistake_count === "number"
+      ? summary.mistake_count
+      : review.medium_deviation_count + review.high_deviation_count;
+  const bigMistakeCount =
+    typeof summary.big_mistake_count === "number" ? summary.big_mistake_count : review.high_deviation_count;
+  const riichiMistakeCount = typeof summary.riichi_mistake_count === "number" ? summary.riichi_mistake_count : 0;
+  const callMistakeCount = typeof summary.call_mistake_count === "number" ? summary.call_mistake_count : 0;
+  const defenseMistakeCount = typeof summary.defense_mistake_count === "number" ? summary.defense_mistake_count : 0;
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -198,6 +285,11 @@ export function ReviewReport() {
               <h1 className="ml-4 text-2xl font-bold text-slate-900">复盘报告</h1>
             </div>
             <div className="flex gap-2">
+              <Link to="/training/mistakes">
+                <Button variant="outline" size="sm">
+                  错题库
+                </Button>
+              </Link>
               <Link to="/review/import">
                 <Button variant="outline" size="sm">
                   新建复盘
@@ -210,6 +302,14 @@ export function ReviewReport() {
 
       <main className="container mx-auto px-4 py-8">
         <div className="mx-auto max-w-7xl space-y-6">
+          {mistakeItemsQuery.isError && (
+            <Card className="border-amber-200 bg-amber-50/80">
+              <CardContent className="flex items-center gap-3 py-4 text-sm text-amber-900">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                Mistake library status is unavailable, but the review entries can still be viewed.
+              </CardContent>
+            </Card>
+          )}
           <Card className="overflow-hidden border-0 bg-slate-900 text-white shadow-xl shadow-slate-200">
             <CardContent className="grid gap-6 px-8 py-8 lg:grid-cols-[1.2fr_0.8fr]">
               <div className="space-y-3">
@@ -254,6 +354,39 @@ export function ReviewReport() {
               </div>
             </CardContent>
           </Card>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <Card>
+              <CardContent className="p-5">
+                <div className="text-sm text-slate-500">总失误数</div>
+                <div className="mt-2 text-3xl font-bold text-slate-900">{mistakeCount}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <div className="text-sm text-rose-600">大失误数</div>
+                <div className="mt-2 text-3xl font-bold text-rose-700">{bigMistakeCount}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <div className="text-sm text-violet-600">立直判断偏差</div>
+                <div className="mt-2 text-3xl font-bold text-violet-700">{riichiMistakeCount}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <div className="text-sm text-amber-600">鸣牌判断偏差</div>
+                <div className="mt-2 text-3xl font-bold text-amber-700">{callMistakeCount}</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="p-5">
+                <div className="text-sm text-cyan-600">防守失误</div>
+                <div className="mt-2 text-3xl font-bold text-cyan-700">{defenseMistakeCount}</div>
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader>
@@ -357,6 +490,15 @@ export function ReviewReport() {
                       <div className="mt-1 text-sm text-slate-600">
                         实际：{formatAction(entry.actual_action)} | 推荐：{formatAction(entry.expected_action)}
                       </div>
+                      {entry.tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {entry.tags.map((tag) => (
+                            <Badge key={tag} variant="secondary">
+                              {formatTrainingTag(tag)}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
@@ -368,9 +510,12 @@ export function ReviewReport() {
                 <>
                   <Card>
                     <CardHeader>
-                      <CardTitle className="flex items-center justify-between">
+                      <CardTitle className="flex flex-wrap items-center justify-between gap-2">
                         <span>{formatKyokuLabel(selectedEntry.kyoku_index, selectedEntry.honba)}</span>
-                        {getDeviationBadge(selectedEntry)}
+                        <div className="flex items-center gap-2">
+                          {getDeviationBadge(selectedEntry)}
+                          {selectedMistakeItem && <Badge variant="secondary">已加入错题库</Badge>}
+                        </div>
                       </CardTitle>
                       <CardDescription>
                         第 {selectedEntry.junme} 巡 · 剩余牌 {selectedEntry.tiles_left} 张 · 动作类型{" "}
@@ -399,6 +544,54 @@ export function ReviewReport() {
                           </div>
                         </div>
                       )}
+
+                      {selectedEntry.tags.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {selectedEntry.tags.map((tag) => (
+                            <Badge key={tag} variant="secondary">
+                              {formatTrainingTag(tag)}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          onClick={() => selectedEntry && addMistakeMutation.mutate(selectedEntry.id)}
+                          disabled={
+                            selectedEntry.is_match || Boolean(selectedMistakeItem) || addMistakeMutation.isPending
+                          }
+                        >
+                          {selectedMistakeItem ? (
+                            <>
+                              <BookmarkCheck className="mr-2 h-4 w-4" />
+                              已加入错题库
+                            </>
+                          ) : (
+                            <>
+                              <BookmarkPlus className="mr-2 h-4 w-4" />
+                              加入错题库
+                            </>
+                          )}
+                        </Button>
+                        {selectedMistakeItem && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => removeMistakeMutation.mutate(selectedMistakeItem.id)}
+                            disabled={removeMistakeMutation.isPending}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            从错题库移除
+                          </Button>
+                        )}
+                        {selectedEntry.is_match && (
+                          <div className="flex items-center rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
+                            这手已命中推荐动作，不计入错题库。
+                          </div>
+                        )}
+                      </div>
                     </CardContent>
                   </Card>
 
@@ -409,7 +602,7 @@ export function ReviewReport() {
                           <ArrowRightCircle className="mr-2 h-5 w-5" />
                           候选动作
                         </CardTitle>
-                        <CardDescription>当前后端会返回候选动作明细，后续阶段会补更丰富的 Top N 候选。</CardDescription>
+                        <CardDescription>这里展示本次分析返回的候选动作明细。</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
                         {(selectedEntry.details ?? []).map((candidate, index) => (
@@ -459,7 +652,9 @@ export function ReviewReport() {
                         </div>
                         <div className="flex justify-between gap-4">
                           <span className="text-slate-500">Delta</span>
-                          <span className="font-medium text-slate-900">{selectedEntry.delta_score ?? "-"}</span>
+                          <span className="font-medium text-slate-900">
+                            {typeof selectedEntry.delta_score === "number" ? selectedEntry.delta_score.toFixed(2) : "-"}
+                          </span>
                         </div>
                       </CardContent>
                     </Card>
@@ -471,7 +666,7 @@ export function ReviewReport() {
                         <TrendingDown className="mr-2 h-5 w-5" />
                         状态快照
                       </CardTitle>
-                      <CardDescription>用于阶段 2 调试和人工验收，后续可替换为图形化局面展示。</CardDescription>
+                      <CardDescription>展示该决策点对应的结构化状态信息。</CardDescription>
                     </CardHeader>
                     <CardContent>
                       <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 text-xs text-slate-100">

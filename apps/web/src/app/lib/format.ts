@@ -48,6 +48,9 @@ export function formatSourceType(sourceType: string) {
   if (sourceType === "majsoul_url") {
     return "雀魂链接";
   }
+  if (sourceType === "majsoul_file") {
+    return "雀魂导出文件";
+  }
   return sourceType;
 }
 

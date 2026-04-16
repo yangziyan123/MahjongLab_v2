@@ -1,6 +1,6 @@
 # MahjongLab Web
 
-阶段 2 的复盘前端 MVP。
+复盘优先的 Web 前端。
 
 ## 当前实现范围
 
@@ -9,7 +9,8 @@
 - `/review/task/:taskId`
 - `/review/history`
 - `/review/report/:reportId`
-- `/play/*` 占位页
+- `/training/mistakes`
+- `/play/*` 入口页
 
 ## 技术栈
 
@@ -51,5 +52,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 - 不提供登录页
 - 仍按单用户本地模式运行
-- `Tenhou / Majsoul` 外部牌谱导入尚未开放
-- AI 对战页目前仍是阶段占位
+- 已支持 `Tenhou URL / Tenhou ID / 雀魂导出文件 / mjai 文件 / JSON` 导入
+- 已支持从复盘报告加入错题库，并在错题库页回跳原报告
+- `Majsoul` 当前只支持导出文件导入，不支持 URL 直连
+- AI 对战页当前暂不可用

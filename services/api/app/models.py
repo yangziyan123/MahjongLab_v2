@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,7 @@ class User(Base):
     review_jobs: Mapped[list["ReviewJob"]] = relationship(back_populates="user")
     reviews: Mapped[list["Review"]] = relationship(back_populates="user")
     matches: Mapped[list["Match"]] = relationship(back_populates="user")
+    mistake_items: Mapped[list["MistakeItem"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Match(Base):
@@ -149,6 +150,7 @@ class Review(Base):
     match: Mapped[Match | None] = relationship(back_populates="reviews")
     job: Mapped[ReviewJob] = relationship(back_populates="review", foreign_keys=[job_id])
     entries: Mapped[list["ReviewEntry"]] = relationship(back_populates="review", cascade="all, delete-orphan")
+    mistake_items: Mapped[list["MistakeItem"]] = relationship(back_populates="review", cascade="all, delete-orphan")
 
 
 class ReviewEntry(Base):
@@ -177,3 +179,29 @@ class ReviewEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     review: Mapped[Review] = relationship(back_populates="entries")
+    mistake_items: Mapped[list["MistakeItem"]] = relationship(back_populates="review_entry", cascade="all, delete-orphan")
+
+
+class MistakeItem(Base):
+    __tablename__ = "mistake_items"
+    __table_args__ = (UniqueConstraint("user_id", "review_entry_id", name="uq_mistake_items_user_entry"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"), nullable=False, index=True)
+    review_entry_id: Mapped[int] = mapped_column(ForeignKey("review_entries.id"), nullable=False, index=True)
+    category: Mapped[str] = mapped_column(Text, nullable=False, default="other", index=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags_json: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    snapshot_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    user: Mapped[User] = relationship(back_populates="mistake_items")
+    review: Mapped[Review] = relationship(back_populates="mistake_items")
+    review_entry: Mapped[ReviewEntry] = relationship(back_populates="mistake_items")

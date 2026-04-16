@@ -92,12 +92,17 @@ export function ReviewHistory() {
               </Link>
               <h1 className="ml-4 text-2xl font-bold text-slate-900">历史复盘</h1>
             </div>
-            <Link to="/review/import">
-              <Button>
-                <FileText className="mr-2 h-4 w-4" />
-                新建复盘
-              </Button>
-            </Link>
+            <div className="flex gap-2">
+              <Link to="/training/mistakes">
+                <Button variant="outline">错题库</Button>
+              </Link>
+              <Link to="/review/import">
+                <Button>
+                  <FileText className="mr-2 h-4 w-4" />
+                  新建复盘
+                </Button>
+              </Link>
+            </div>
           </div>
         </div>
       </header>

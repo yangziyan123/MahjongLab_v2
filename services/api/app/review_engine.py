@@ -6,6 +6,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -15,6 +18,7 @@ from .models import MatchEvent, ReviewJob
 
 ACTIONABLE_TYPES = {"dahai", "reach", "chi", "pon", "daiminkan", "ankan", "kakan", "hora", "ryukyoku"}
 BOUNDARY_TYPES = {"start_game", "start_kyoku", "end_kyoku", "end_game"}
+TENHOU_HOSTS = {"tenhou.net", "www.tenhou.net"}
 DECISION_TYPE_MAP = {
     "dahai": "discard",
     "reach": "riichi",
@@ -75,6 +79,201 @@ def parse_json_line(line: str, label: str) -> dict[str, Any]:
         raise ReviewExecutionError(f"failed to parse {label} JSON: {exc}") from exc
 
 
+def build_storage_artifact(prefix: str, filename: str) -> tuple[str, Path]:
+    object_key = f"{prefix}/{filename}"
+    file_path = settings.storage_dir / object_key
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    return object_key, file_path
+
+
+def parse_tenhou_url(url_text: str) -> tuple[str, int | None]:
+    parsed = urlparse(url_text)
+    if parsed.scheme not in {"http", "https"}:
+        raise ReviewExecutionError("tenhou_url must start with http:// or https://")
+
+    host = parsed.hostname or ""
+    if host not in TENHOU_HOSTS:
+        raise ReviewExecutionError("tenhou_url must point to tenhou.net")
+
+    query = parse_qs(parsed.query)
+    log_values = query.get("log", [])
+    if not log_values or not log_values[0].strip():
+        raise ReviewExecutionError("tenhou_url does not contain a valid log parameter")
+
+    actor: int | None = None
+    tw_values = query.get("tw", [])
+    if tw_values:
+        try:
+            actor = int(tw_values[0])
+        except ValueError as exc:
+            raise ReviewExecutionError("tenhou_url contains an invalid tw parameter") from exc
+        if actor not in {0, 1, 2, 3}:
+            raise ReviewExecutionError("tenhou_url tw parameter must be within 0-3")
+
+    return log_values[0].strip(), actor
+
+
+def resolve_tenhou_source(job: ReviewJob) -> tuple[str, int | None]:
+    source = job.source_payload or {}
+
+    if job.source_type == "tenhou_id":
+        tenhou_id = source.get("id") or source.get("tenhou_id") or source.get("log_id")
+        if not isinstance(tenhou_id, str) or not tenhou_id.strip():
+            raise ReviewExecutionError("tenhou_id source requires a non-empty id")
+        tenhou_id = tenhou_id.strip()
+        return tenhou_id, None
+
+    if job.source_type != "tenhou_url":
+        raise ReviewExecutionError(f"unsupported tenhou source_type: {job.source_type}")
+
+    tenhou_url = source.get("url")
+    if not isinstance(tenhou_url, str) or not tenhou_url.strip():
+        raise ReviewExecutionError("tenhou_url source requires a non-empty url")
+
+    log_id, actor = parse_tenhou_url(tenhou_url.strip())
+    return log_id, actor
+
+
+def download_tenhou_log(log_id: str, target_path: Path) -> None:
+    request = Request(
+        url=f"https://tenhou.net/5/mjlog2json.cgi?{log_id}",
+        headers={
+            "Referer": "https://tenhou.net/",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            body = response.read().decode("utf-8")
+    except HTTPError as exc:
+        raise ReviewExecutionError(f"failed to download Tenhou log {log_id}: HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise ReviewExecutionError(f"failed to download Tenhou log {log_id}: {exc.reason}") from exc
+
+    if not body.strip():
+        raise ReviewExecutionError(f"downloaded Tenhou log {log_id} is empty")
+
+    target_path.write_text(body, encoding="utf-8")
+
+
+def summarize_process_output(stdout: str, stderr: str, max_lines: int = 20) -> str:
+    chunks = [chunk.strip() for chunk in (stderr, stdout) if chunk and chunk.strip()]
+    if not chunks:
+        return "command failed without stdout/stderr output"
+
+    lines = "\n".join(chunks).splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def convert_external_log_to_mjai(raw_path: Path, normalized_path: Path, source_label: str) -> None:
+    command = [
+        settings.cargo_bin,
+        "run",
+        "--manifest-path",
+        str(settings.mjai_reviewer_manifest),
+        "--",
+        "--no-review",
+        "--in-file",
+        str(raw_path),
+        "--mjai-out",
+        str(normalized_path),
+    ]
+
+    try:
+        process = subprocess.run(
+            command,
+            cwd=settings.repo_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=300,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise ReviewExecutionError(f"cargo executable not found; {source_label} import requires Rust tooling") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ReviewExecutionError(f"{source_label} import timed out while converting to mjai") from exc
+
+    if process.returncode != 0:
+        raise ReviewExecutionError(
+            f"failed to convert {source_label} log to mjai:\n" + summarize_process_output(process.stdout, process.stderr),
+        )
+
+
+def ensure_tenhou_artifacts(db: Session, job: ReviewJob) -> Path:
+    log_id, actor_from_url = resolve_tenhou_source(job)
+
+    if not settings.mjai_reviewer_manifest.exists():
+        raise ReviewExecutionError(f"mjai-reviewer manifest not found: {settings.mjai_reviewer_manifest}")
+
+    source_payload = dict(job.source_payload or {})
+    source_payload["resolved_log_id"] = log_id
+    if actor_from_url is not None:
+        source_payload["resolved_tw"] = actor_from_url
+        if not job.target_player_ref:
+            job.target_player_ref = str(actor_from_url)
+    job.source_payload = source_payload
+
+    raw_key = job.raw_input_object_key or build_storage_artifact("sources/tenhou", f"{job.id}.json")[0]
+    normalized_key = job.normalized_mjai_object_key or build_storage_artifact("normalized/tenhou", f"{job.id}.jsonl")[0]
+    raw_path = settings.storage_dir / raw_key
+    normalized_path = settings.storage_dir / normalized_key
+
+    if raw_path.exists() and normalized_path.exists():
+        job.raw_input_object_key = raw_key
+        job.normalized_mjai_object_key = normalized_key
+        db.commit()
+        return normalized_path
+
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    download_tenhou_log(log_id, raw_path)
+    convert_external_log_to_mjai(raw_path, normalized_path, "Tenhou")
+
+    if not raw_path.exists():
+        raise ReviewExecutionError("Tenhou import finished but raw log file was not created")
+    if not normalized_path.exists():
+        raise ReviewExecutionError("Tenhou import finished but normalized mjai file was not created")
+
+    job.raw_input_object_key = raw_key
+    job.normalized_mjai_object_key = normalized_key
+    db.commit()
+    return normalized_path
+
+
+def ensure_majsoul_file_artifacts(db: Session, job: ReviewJob) -> Path:
+    if not settings.mjai_reviewer_manifest.exists():
+        raise ReviewExecutionError(f"mjai-reviewer manifest not found: {settings.mjai_reviewer_manifest}")
+
+    source = job.source_payload or {}
+    file_key = source.get("file_key") or job.raw_input_object_key
+    if not isinstance(file_key, str) or not file_key:
+        raise ReviewExecutionError("majsoul_file source requires file_key")
+
+    raw_path = settings.storage_dir / file_key
+    if not raw_path.exists():
+        raise ReviewExecutionError(f"majsoul export file not found: {file_key}")
+
+    normalized_key = job.normalized_mjai_object_key or build_storage_artifact("normalized/majsoul", f"{job.id}.jsonl")[0]
+    normalized_path = settings.storage_dir / normalized_key
+    if normalized_path.exists():
+        job.raw_input_object_key = file_key
+        job.normalized_mjai_object_key = normalized_key
+        db.commit()
+        return normalized_path
+
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    convert_external_log_to_mjai(raw_path, normalized_path, "Majsoul")
+
+    if not normalized_path.exists():
+        raise ReviewExecutionError("Majsoul import finished but normalized mjai file was not created")
+
+    job.raw_input_object_key = file_key
+    job.normalized_mjai_object_key = normalized_key
+    db.commit()
+    return normalized_path
+
+
 def load_events_from_file(file_path: Path) -> list[dict[str, Any]]:
     content = file_path.read_text(encoding="utf-8").strip()
     if not content:
@@ -85,9 +284,14 @@ def load_events_from_file(file_path: Path) -> list[dict[str, Any]]:
             raise ReviewExecutionError("expected JSON array replay payload")
         return payload
     if content[0] == "{":
-        payload = json.loads(content)
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError:
+            return [json.loads(line) for line in content.splitlines() if line.strip()]
         if "events" in payload and isinstance(payload["events"], list):
             return payload["events"]
+        if "type" in payload:
+            return [payload]
         raise ReviewExecutionError("expected object payload with events field")
     return [json.loads(line) for line in content.splitlines() if line.strip()]
 
@@ -122,8 +326,16 @@ def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
             raise ReviewExecutionError(f"no match events found for match_id={match_id}")
         return events
 
-    if source_type in {"tenhou_url", "tenhou_id", "majsoul_url"}:
-        raise ReviewExecutionError(f"{source_type} is not implemented in phase 1 MVP")
+    if source_type in {"tenhou_url", "tenhou_id"}:
+        normalized_path = ensure_tenhou_artifacts(db, job)
+        return load_events_from_file(normalized_path)
+
+    if source_type == "majsoul_file":
+        normalized_path = ensure_majsoul_file_artifacts(db, job)
+        return load_events_from_file(normalized_path)
+
+    if source_type == "majsoul_url":
+        raise ReviewExecutionError("majsoul_url is not implemented yet")
 
     raise ReviewExecutionError(f"unsupported source_type: {source_type}")
 
@@ -231,6 +443,51 @@ def count_mask_bits(mask_bits: Any) -> int:
         return 0
 
 
+def classify_entry_tags(decision_type: str, shanten: int | None, defense_context: bool) -> list[str]:
+    tags: list[str] = []
+    if decision_type == "riichi":
+        tags.append("riichi_judgment")
+    elif decision_type in {"chi", "pon", "kan"}:
+        tags.extend(["call_judgment", f"{decision_type}_judgment"])
+    elif decision_type == "discard":
+        if defense_context:
+            tags.append("defense")
+        elif shanten is not None and shanten <= 1:
+            tags.append("attack")
+        else:
+            tags.append("efficiency")
+    elif decision_type == "agari":
+        tags.append("agari_judgment")
+    elif decision_type == "ryukyoku":
+        tags.append("ryukyoku_judgment")
+
+    return tags or ["other"]
+
+
+def classify_deviation_level(
+    is_match: bool,
+    decision_type: str,
+    expected_action: dict[str, Any],
+    actual_action: dict[str, Any] | None,
+    tags: list[str],
+    q_spread: float,
+) -> str:
+    if is_match:
+        return "none"
+
+    actual_type = actual_action.get("type") if actual_action else "none"
+    expected_type = expected_action.get("type")
+    if "defense" in tags:
+        return "high"
+    if decision_type in {"riichi", "chi", "pon", "kan", "agari", "ryukyoku"}:
+        return "high"
+    if actual_type != expected_type:
+        return "high"
+    if q_spread >= 8.0:
+        return "high"
+    return "medium"
+
+
 def build_review(
     events: list[dict[str, Any]],
     outputs: list[dict[str, Any]],
@@ -244,6 +501,7 @@ def build_review(
     tiles_left = 70
     last_actor: int | None = None
     last_tile: str | None = None
+    riichi_actors: set[int] = set()
 
     for index, event in enumerate(events):
         event_type = event.get("type")
@@ -254,11 +512,14 @@ def build_review(
             tiles_left = 70
             last_actor = None
             last_tile = None
+            riichi_actors = set()
             continue
+        actor = event.get("actor")
+        if event_type == "reach" and actor is not None:
+            riichi_actors.add(int(actor))
         if event_type in {"end_kyoku", "end_game", "start_game"}:
             continue
 
-        actor = event.get("actor")
         if event_type == "tsumo" and actor == target_actor:
             junme += 1
             tiles_left = max(0, tiles_left - 1)
@@ -276,10 +537,21 @@ def build_review(
         expected_action = {key: value for key, value in output.items() if key != "meta"}
         actual_action = next_actual_action(events, index, target_actor)
         is_match = action_matches(expected_action, actual_action)
-        deviation_level = "none" if is_match else "medium"
         decision_type = DECISION_TYPE_MAP.get(expected_action.get("type"), "other")
         q_values = meta.get("q_values", []) or []
         best_q_value = float(max(q_values)) if q_values else None
+        q_spread = float(max(q_values) - min(q_values)) if len(q_values) >= 2 else 0.0
+        shanten = meta.get("shanten")
+        defense_context = any(other_actor != target_actor for other_actor in riichi_actors)
+        tags = classify_entry_tags(decision_type, shanten, defense_context)
+        deviation_level = classify_deviation_level(
+            is_match=is_match,
+            decision_type=decision_type,
+            expected_action=expected_action,
+            actual_action=actual_action,
+            tags=tags,
+            q_spread=q_spread,
+        )
 
         entries.append(
             ReviewEntryDraft(
@@ -295,8 +567,8 @@ def build_review(
                 expected_action=expected_action,
                 is_match=is_match,
                 deviation_level=deviation_level,
-                delta_score=None if is_match else 0.0,
-                shanten=meta.get("shanten"),
+                delta_score=None if is_match else round(q_spread, 4),
+                shanten=shanten,
                 at_furiten=meta.get("at_furiten"),
                 details=[
                     {
@@ -310,14 +582,20 @@ def build_review(
                     "trigger_event": event,
                     "target_actor": target_actor,
                 },
-                tags=[],
+                tags=tags,
             ),
         )
 
     reviewed_decision_count = len(entries)
     optimal_count = sum(1 for entry in entries if entry.is_match)
-    medium_deviation_count = reviewed_decision_count - optimal_count
-    high_deviation_count = 0
+    mistake_count = reviewed_decision_count - optimal_count
+    medium_deviation_count = sum(1 for entry in entries if entry.deviation_level == "medium")
+    high_deviation_count = sum(1 for entry in entries if entry.deviation_level == "high")
+    riichi_mistake_count = sum(
+        1 for entry in entries if not entry.is_match and "riichi_judgment" in entry.tags
+    )
+    call_mistake_count = sum(1 for entry in entries if not entry.is_match and "call_judgment" in entry.tags)
+    defense_mistake_count = sum(1 for entry in entries if not entry.is_match and "defense" in entry.tags)
     rating = optimal_count / reviewed_decision_count if reviewed_decision_count else 0.0
 
     summary = {
@@ -325,13 +603,35 @@ def build_review(
         "reviewed_decision_count": reviewed_decision_count,
         "match_decision_count": optimal_count,
         "optimal_count": optimal_count,
+        "mistake_count": mistake_count,
+        "big_mistake_count": high_deviation_count,
         "medium_deviation_count": medium_deviation_count,
         "high_deviation_count": high_deviation_count,
+        "riichi_mistake_count": riichi_mistake_count,
+        "call_mistake_count": call_mistake_count,
+        "defense_mistake_count": defense_mistake_count,
         "rating": rating,
     }
     stats = {
         "rating": rating,
         "phi_matrix": extra_data.get("phi_matrix", []),
+        "decision_type_breakdown": {
+            "discard": sum(1 for entry in entries if entry.decision_type == "discard"),
+            "riichi": sum(1 for entry in entries if entry.decision_type == "riichi"),
+            "chi": sum(1 for entry in entries if entry.decision_type == "chi"),
+            "pon": sum(1 for entry in entries if entry.decision_type == "pon"),
+            "kan": sum(1 for entry in entries if entry.decision_type == "kan"),
+            "agari": sum(1 for entry in entries if entry.decision_type == "agari"),
+            "ryukyoku": sum(1 for entry in entries if entry.decision_type == "ryukyoku"),
+            "other": sum(1 for entry in entries if entry.decision_type == "other"),
+        },
+        "mistake_category_breakdown": {
+            "riichi_judgment": riichi_mistake_count,
+            "call_judgment": call_mistake_count,
+            "defense": defense_mistake_count,
+            "efficiency": sum(1 for entry in entries if not entry.is_match and "efficiency" in entry.tags),
+            "attack": sum(1 for entry in entries if not entry.is_match and "attack" in entry.tags),
+        },
     }
     raw_result = {
         "summary": summary,

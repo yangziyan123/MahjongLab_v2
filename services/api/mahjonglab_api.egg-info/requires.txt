@@ -1,0 +1,5 @@
+fastapi<1.0,>=0.135
+uvicorn<1.0,>=0.44
+sqlalchemy<3.0,>=2.0
+pydantic<3.0,>=2.10
+python-multipart<1.0,>=0.0.26

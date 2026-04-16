@@ -26,10 +26,8 @@ export function PlayComingSoon() {
               <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-blue-100">
                 <Bot className="h-6 w-6 text-blue-600" />
               </div>
-              <CardTitle>对战阶段尚未开始</CardTitle>
-              <CardDescription>
-                当前已完成复盘后端与复盘前端 MVP。AI 对战会在后续阶段接入 `match-service` 和 `ai-gateway`。
-              </CardDescription>
+              <CardTitle>AI 对战</CardTitle>
+              <CardDescription>当前暂不提供在线对战，可先使用复盘分析功能。</CardDescription>
             </CardHeader>
             <CardContent className="flex gap-4">
               <Link to="/review/import" className="flex-1">

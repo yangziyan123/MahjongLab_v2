@@ -6,15 +6,18 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .jobs import enqueue_review_job
-from .models import Review, ReviewEntry, ReviewJob, User
+from .models import MistakeItem, Review, ReviewEntry, ReviewJob, User
 from .schemas import (
+    CreateMistakeItemRequest,
     CreateReviewJobRequest,
     DashboardSummary,
+    MistakeItemOut,
+    PaginatedMistakeItems,
     PaginatedReviewEntries,
     PaginatedReviews,
     ReplaySourceOption,
@@ -120,6 +123,68 @@ def serialize_entry(entry: ReviewEntry) -> ReviewEntryOut:
     )
 
 
+def derive_mistake_category(tags: list[str], decision_type: str) -> str:
+    priority = ["defense", "riichi_judgment", "call_judgment", "efficiency", "attack"]
+    for candidate in priority:
+        if candidate in tags:
+            return candidate
+
+    if decision_type == "riichi":
+        return "riichi_judgment"
+    if decision_type in {"chi", "pon", "kan"}:
+        return "call_judgment"
+    if decision_type == "discard":
+        return "efficiency"
+    return "other"
+
+
+def build_mistake_snapshot(review: Review, entry: ReviewEntry) -> dict:
+    return {
+        "platform": review.platform,
+        "target_actor": review.target_actor,
+        "target_player_label": review.target_player_label,
+        "entry_seq": entry.seq,
+        "kyoku_index": entry.kyoku_index,
+        "honba": entry.honba,
+        "junme": entry.junme,
+        "decision_type": entry.decision_type,
+        "deviation_level": entry.deviation_level,
+        "actual_action": entry.actual_action_json,
+        "expected_action": entry.expected_action_json or {},
+        "state_snapshot": entry.state_snapshot_json or {},
+    }
+
+
+def serialize_mistake(item: MistakeItem) -> MistakeItemOut:
+    snapshot = item.snapshot_json or {}
+    review = item.review
+    entry = item.review_entry
+
+    target_actor = review.target_actor if review is not None else int(snapshot.get("target_actor", 0))
+    return MistakeItemOut(
+        id=item.id,
+        review_id=item.review_id,
+        review_entry_id=item.review_entry_id,
+        platform=review.platform if review is not None else snapshot.get("platform"),
+        target_actor=target_actor,
+        target_player_label=review.target_player_label if review is not None else snapshot.get("target_player_label"),
+        entry_seq=entry.seq if entry is not None else int(snapshot.get("entry_seq", 0)),
+        kyoku_index=entry.kyoku_index if entry is not None else int(snapshot.get("kyoku_index", 0)),
+        honba=entry.honba if entry is not None else int(snapshot.get("honba", 0)),
+        junme=entry.junme if entry is not None else int(snapshot.get("junme", 0)),
+        decision_type=entry.decision_type if entry is not None else str(snapshot.get("decision_type", "other")),
+        deviation_level=entry.deviation_level if entry is not None else str(snapshot.get("deviation_level", "medium")),
+        category=item.category,
+        note=item.note,
+        tags=item.tags_json or [],
+        actual_action=snapshot.get("actual_action"),
+        expected_action=snapshot.get("expected_action") or {},
+        state_snapshot=snapshot.get("state_snapshot") or {},
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     settings.ensure_dirs()
@@ -147,10 +212,12 @@ def get_dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummary:
     review_count = db.scalar(select(func.count(Review.id))) or 0
     completed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "completed")) or 0
     failed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "failed")) or 0
+    mistake_count = db.scalar(select(func.count(MistakeItem.id))) or 0
     return DashboardSummary(
         review_count=int(review_count),
         completed_job_count=int(completed_job_count),
         failed_job_count=int(failed_job_count),
+        mistake_count=int(mistake_count),
     )
 
 
@@ -158,12 +225,13 @@ def get_dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummary:
 def list_replay_sources() -> dict[str, list[ReplaySourceOption]]:
     return {
         "items": [
-            ReplaySourceOption(key="internal_match", label="Internal Match", enabled=True),
-            ReplaySourceOption(key="upload_file", label="Upload File", enabled=True),
-            ReplaySourceOption(key="inline_json", label="Inline JSON", enabled=True),
-            ReplaySourceOption(key="tenhou_url", label="Tenhou URL", enabled=False),
-            ReplaySourceOption(key="tenhou_id", label="Tenhou ID", enabled=False),
-            ReplaySourceOption(key="majsoul_url", label="Majsoul URL", enabled=False),
+            ReplaySourceOption(key="internal_match", label="平台内对局", enabled=True),
+            ReplaySourceOption(key="upload_file", label="文件上传", enabled=True),
+            ReplaySourceOption(key="inline_json", label="JSON 数据", enabled=True),
+            ReplaySourceOption(key="tenhou_url", label="天凤链接", enabled=True),
+            ReplaySourceOption(key="tenhou_id", label="天凤 ID", enabled=True),
+            ReplaySourceOption(key="majsoul_file", label="雀魂导出文件", enabled=True),
+            ReplaySourceOption(key="majsoul_url", label="雀魂链接", enabled=False),
         ]
     }
 
@@ -192,7 +260,7 @@ def create_review_job(payload: CreateReviewJobRequest, db: Session = Depends(get
     user = get_or_create_default_user(db)
     source = payload.source or {}
     match_id = source.get("match_id") if payload.source_type == "internal_match" else None
-    raw_input_object_key = source.get("file_key") if payload.source_type == "upload_file" else None
+    raw_input_object_key = source.get("file_key") if payload.source_type in {"upload_file", "majsoul_file"} else None
 
     job = ReviewJob(
         user_id=user.id,
@@ -328,6 +396,114 @@ def list_review_entries(
         page_size=page_size,
         total=int(total),
     )
+
+
+@app.post("/api/reviews/{review_id}/mistakes", response_model=MistakeItemOut, status_code=status.HTTP_201_CREATED)
+def create_mistake_item(
+    review_id: str,
+    payload: CreateMistakeItemRequest,
+    db: Session = Depends(get_db),
+) -> MistakeItemOut:
+    user = get_or_create_default_user(db)
+    review = db.get(Review, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="review not found")
+
+    entry = db.get(ReviewEntry, payload.review_entry_id)
+    if entry is None or entry.review_id != review_id:
+        raise HTTPException(status_code=404, detail="review entry not found")
+    if entry.deviation_level == "none" or entry.is_match:
+        raise HTTPException(status_code=400, detail="only deviated review entries can be added to mistakes")
+
+    existing = db.scalar(
+        select(MistakeItem)
+        .where(MistakeItem.user_id == user.id, MistakeItem.review_entry_id == entry.id)
+        .options(joinedload(MistakeItem.review), joinedload(MistakeItem.review_entry)),
+    )
+
+    tags = sorted({*(entry.tags_json or []), *(payload.tags or [])})
+    category = derive_mistake_category(tags, entry.decision_type)
+    snapshot = build_mistake_snapshot(review, entry)
+
+    if existing is None:
+        existing = MistakeItem(
+            user_id=user.id,
+            review_id=review.id,
+            review_entry_id=entry.id,
+            category=category,
+            note=payload.note,
+            tags_json=tags,
+            snapshot_json=snapshot,
+        )
+        db.add(existing)
+    else:
+        existing.category = category
+        existing.note = payload.note if payload.note is not None else existing.note
+        existing.tags_json = tags
+        existing.snapshot_json = snapshot
+
+    db.commit()
+    db.refresh(existing)
+    return serialize_mistake(existing)
+
+
+@app.get("/api/mistakes", response_model=PaginatedMistakeItems, response_model_by_alias=False)
+def list_mistake_items(
+    q: str | None = Query(default=None),
+    review_id: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    decision_type: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> PaginatedMistakeItems:
+    user = get_or_create_default_user(db)
+    stmt = (
+        select(MistakeItem)
+        .where(MistakeItem.user_id == user.id)
+        .join(Review, MistakeItem.review_id == Review.id)
+        .join(ReviewEntry, MistakeItem.review_entry_id == ReviewEntry.id)
+        .options(joinedload(MistakeItem.review), joinedload(MistakeItem.review_entry))
+    )
+
+    if review_id:
+        stmt = stmt.where(MistakeItem.review_id == review_id)
+    if category and category != "all":
+        stmt = stmt.where(MistakeItem.category == category)
+    if decision_type and decision_type != "all":
+        stmt = stmt.where(ReviewEntry.decision_type == decision_type)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(
+            or_(
+                MistakeItem.note.ilike(like),
+                MistakeItem.category.ilike(like),
+                Review.target_player_label.ilike(like),
+            ),
+        )
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    items = db.scalars(
+        stmt.order_by(MistakeItem.created_at.desc()).offset((page - 1) * page_size).limit(page_size),
+    ).all()
+    return PaginatedMistakeItems(
+        items=[serialize_mistake(item) for item in items],
+        page=page,
+        page_size=page_size,
+        total=int(total),
+    )
+
+
+@app.delete("/api/mistakes/{mistake_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_mistake_item(mistake_id: str, db: Session = Depends(get_db)) -> Response:
+    user = get_or_create_default_user(db)
+    mistake = db.scalar(select(MistakeItem).where(MistakeItem.id == mistake_id, MistakeItem.user_id == user.id))
+    if mistake is None:
+        raise HTTPException(status_code=404, detail="mistake item not found")
+
+    db.delete(mistake)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.delete("/api/reviews/{review_id}", status_code=status.HTTP_204_NO_CONTENT)

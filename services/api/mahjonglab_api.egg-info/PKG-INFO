@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: mahjonglab-api
+Version: 0.1.0
+Summary: Review-first backend MVP for MahjongLab
+Requires-Python: >=3.11
+Requires-Dist: fastapi<1.0,>=0.135
+Requires-Dist: uvicorn<1.0,>=0.44
+Requires-Dist: sqlalchemy<3.0,>=2.0
+Requires-Dist: pydantic<3.0,>=2.10
+Requires-Dist: python-multipart<1.0,>=0.0.26

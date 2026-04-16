@@ -126,8 +126,6 @@ python -m uvicorn app.main:app --reload
 - `services/api/data/storage/uploads`
 - `services/api/data/storage/reviews`
 
-## 5. 当前阶段建议
-
 ## 5. 阶段 2 前端开发环境
 
 当前阶段 2 已额外验证：
@@ -157,18 +155,45 @@ cd apps\web
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ```
 
-## 6. 当前阶段建议
+## 6. 阶段 3 导入与训练联调环境
 
-当前已经具备继续进入阶段 3 的条件。
+当前阶段 3 已额外验证：
+
+- `cargo metadata --manifest-path mjai-reviewer/Cargo.toml --format-version 1 --no-deps`
+- `python -m compileall services/api/app`
+- `npm.cmd run build`
+- `Tenhou` 原始牌谱下载
+- `mjai-reviewer --no-review --in-file` 转换 `mjai`
+- 使用缓存好的 `raw_input_object_key / normalized_mjai_object_key` 跑通 `process_review_job`
+- `majsoul_file -> review -> mistake_item` 主链路
+
+阶段 3 联调前确认：
+
+- `Mortal/mortal/config.toml` 已存在
+- `cargo` 可用
+- `mjai-reviewer/Cargo.toml` 可读取
+- `services/api/data/storage/sources/tenhou` 与 `normalized/tenhou` 可写
+
+阶段 3 相关运行时文件：
+
+- `services/api/data/storage/sources/tenhou/*.json`
+- `services/api/data/storage/normalized/tenhou/*.jsonl`
+- `services/api/data/storage/normalized/majsoul/*.jsonl`
+- `services/api/data/storage/reviews/*.json`
+
+## 7. 当前阶段建议
+
+当前已经具备结束阶段 3、进入阶段 4 的条件。
 
 仍需优先关注的问题：
 
-1. `Tenhou / Majsoul` 外部牌谱适配尚未接入
-2. 独立 `review-worker`、Redis 队列、对象存储还没有从本地 MVP 形态切换到目标架构
-3. 前端当前不提供登录页，仍按单用户本地模式运行
-4. AI 对战前端仍未开始，当前只提供阶段占位页
+1. `Tenhou` 下载成功率仍依赖外部网络和 `tenhou.net`
+2. `Majsoul` 当前只支持导出文件导入，不支持 URL 直连抓取
+3. 独立 `review-worker`、Redis 队列、对象存储还没有从本地 MVP 形态切换到目标架构
+4. 前端当前不提供登录页，仍按单用户本地模式运行
+5. AI 对战前端仍未开始，当前只提供阶段占位页
 
-## 7. 文档原则
+## 8. 文档原则
 
 - 本文档不是冻结规范
 - 后续只要环境、版本、目录或命令发生变化，直接修改本文档
