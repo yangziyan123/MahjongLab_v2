@@ -28,7 +28,12 @@ cd infra\docker
 docker compose up -d
 ```
 
-## 3. 上游仓库状态
+## 3. 汇聚源码目录状态
+
+说明：
+
+- 当前 `Mortal`、`mjai.app`、`mjai-reviewer`、`原型设计` 已作为源码目录汇聚到主仓中
+- 下面记录的是这些目录在当前工作区内的可用性验证结果
 
 ### 3.1 `原型设计`
 

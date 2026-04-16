@@ -1,9 +1,3 @@
-# Reference repositories managed outside the main repo
-/Mortal/
-/mjai.app/
-/mjai-reviewer/
-/原型设计/
-
 # Node / frontend
 **/node_modules/
 **/dist/

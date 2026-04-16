@@ -121,16 +121,17 @@
 
 #### 架构与仓库
 
-- 创建主仓库，不直接在参考仓库内开发业务
+- 创建主仓库，并把参考源码目录统一纳入主仓管理
 - 建立目录结构：
   - `apps/web`
   - `services/api`
   - `services/review-worker`
   - `services/ai-gateway`
   - `services/match-service`
-  - `vendor/Mortal`
-  - `vendor/mjai.app`
-  - `vendor/mjai-reviewer`
+  - `Mortal`
+  - `mjai.app`
+  - `mjai-reviewer`
+  - `原型设计`
 - 建立 `.editorconfig`、`ruff/black`、`eslint/prettier`、`commit hooks`
 
 #### 环境与基础设施

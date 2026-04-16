@@ -74,13 +74,13 @@ MahjongLab 的目标不是单纯做一个“能打牌的网站”，而是做一
 - 不要把 `mjai.app` 的 Docker Simulator 直接拿来做线上实时真人桌服务
 - 不要把 `原型设计` 原样当生产前端直接上线，必须先替换 mock 数据、补状态管理和接口层
 
-### 2.3 建议的上游管理方式
+### 2.3 当前仓库管理方式
 
-- 这四个仓库保持只读或最小改动
-- 你的主项目单独建仓库，使用 `vendor/`、git submodule 或 git subtree 管理上游
-- 所有上游交互都通过 `adapter`/`bridge` 层完成
+- 当前主项目已直接纳管 `Mortal`、`mjai.app`、`mjai-reviewer`、`原型设计` 的源码目录
+- 不再保留这些目录各自的内部 Git 元数据，统一由主仓管理版本历史
+- 即使源码已汇聚到主仓，业务代码仍应通过 `adapter`/`bridge` 层与这些能力交互
 
-这样后续同步上游更新才不会失控。
+这样可以保证 GitHub 上一次 `clone` 就能拿到完整源码树，同时避免业务边界失控。
 
 ### 2.4 前端原型复用建议
 
@@ -437,10 +437,10 @@ Infra:
 ```text
 MahjongLab/
   DEVELOPMENT_PLAN.md
-  vendor/
-    Mortal/
-    mjai.app/
-    mjai-reviewer/
+  Mortal/
+  mjai.app/
+  mjai-reviewer/
+  原型设计/
   apps/
     web/
   services/
@@ -719,9 +719,9 @@ MahjongLab/
 
 应对：
 
-- 上游只读
+- 汇聚到主仓后的外部源码目录尽量保持低频改动
 - 通过 Adapter 层隔离
-- 固定版本标签，不追随 `main` 直接升级
+- 升级外部源码时记录来源版本和同步说明
 
 ### 风险 5：实时桌面与服务端状态不一致
 
