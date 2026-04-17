@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .majsoul_url_import import MajsoulUrlImportError, download_majsoul_log_from_url
 from .models import MatchEvent, ReviewJob
 
 ACTIONABLE_TYPES = {"dahai", "reach", "chi", "pon", "daiminkan", "ankan", "kakan", "hora", "ryukyoku"}
@@ -86,6 +87,48 @@ def build_storage_artifact(prefix: str, filename: str) -> tuple[str, Path]:
     return object_key, file_path
 
 
+def parse_tenhou_log_payload(body: str, log_id: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise ReviewExecutionError(f"failed to parse downloaded Tenhou log {log_id}: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise ReviewExecutionError(f"downloaded Tenhou log {log_id} is not a JSON object")
+
+    logs = payload.get("log")
+    if not isinstance(logs, list) or not logs:
+        raise ReviewExecutionError(f"downloaded Tenhou log {log_id} does not contain any kyoku data")
+
+    return payload
+
+
+def is_tenhou_sanma_log(payload: dict[str, Any]) -> bool:
+    logs = payload.get("log")
+    if not isinstance(logs, list):
+        return False
+
+    for kyoku in logs:
+        if not isinstance(kyoku, list):
+            continue
+
+        if len(kyoku) >= 16 and kyoku[13] == [] and kyoku[14] == [] and kyoku[15] == []:
+            return True
+
+        scoreboard = kyoku[1] if len(kyoku) > 1 else None
+        if isinstance(scoreboard, list) and len(scoreboard) == 4 and scoreboard[3] == 0:
+            return True
+
+    return False
+
+
+def validate_tenhou_log_payload(payload: dict[str, Any], log_id: str) -> None:
+    if is_tenhou_sanma_log(payload):
+        raise ReviewExecutionError(
+            f"Tenhou sanma log {log_id} is not supported yet; current review pipeline only supports four-player games",
+        )
+
+
 def parse_tenhou_url(url_text: str) -> tuple[str, int | None]:
     parsed = urlparse(url_text)
     if parsed.scheme not in {"http", "https"}:
@@ -134,7 +177,7 @@ def resolve_tenhou_source(job: ReviewJob) -> tuple[str, int | None]:
     return log_id, actor
 
 
-def download_tenhou_log(log_id: str, target_path: Path) -> None:
+def download_tenhou_log(log_id: str, target_path: Path) -> dict[str, Any]:
     request = Request(
         url=f"https://tenhou.net/5/mjlog2json.cgi?{log_id}",
         headers={
@@ -153,7 +196,10 @@ def download_tenhou_log(log_id: str, target_path: Path) -> None:
     if not body.strip():
         raise ReviewExecutionError(f"downloaded Tenhou log {log_id} is empty")
 
+    payload = parse_tenhou_log_payload(body, log_id)
+    validate_tenhou_log_payload(payload, log_id)
     target_path.write_text(body, encoding="utf-8")
+    return payload
 
 
 def summarize_process_output(stdout: str, stderr: str, max_lines: int = 20) -> str:
@@ -274,6 +320,65 @@ def ensure_majsoul_file_artifacts(db: Session, job: ReviewJob) -> Path:
     return normalized_path
 
 
+def ensure_majsoul_url_artifacts(db: Session, job: ReviewJob) -> Path:
+    if not settings.mjai_reviewer_manifest.exists():
+        raise ReviewExecutionError(f"mjai-reviewer manifest not found: {settings.mjai_reviewer_manifest}")
+
+    source = dict(job.source_payload or {})
+    majsoul_url = source.get("url")
+    if not isinstance(majsoul_url, str) or not majsoul_url.strip():
+        raise ReviewExecutionError("majsoul_url source requires a non-empty url")
+
+    raw_key = job.raw_input_object_key or build_storage_artifact("sources/majsoul", f"{job.id}.json")[0]
+    normalized_key = job.normalized_mjai_object_key or build_storage_artifact("normalized/majsoul", f"{job.id}.jsonl")[0]
+    raw_path = settings.storage_dir / raw_key
+    normalized_path = settings.storage_dir / normalized_key
+
+    if raw_path.exists() and normalized_path.exists():
+        job.raw_input_object_key = raw_key
+        job.normalized_mjai_object_key = normalized_key
+        db.commit()
+        return normalized_path
+
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        resolved_game_uuid = download_majsoul_log_from_url(majsoul_url.strip(), raw_path)
+    except MajsoulUrlImportError as exc:
+        raise ReviewExecutionError(str(exc)) from exc
+
+    convert_external_log_to_mjai(raw_path, normalized_path, "Majsoul")
+
+    if not normalized_path.exists():
+        raise ReviewExecutionError("Majsoul import finished but normalized mjai file was not created")
+
+    source["resolved_game_uuid"] = resolved_game_uuid
+    job.source_payload = source
+    job.raw_input_object_key = raw_key
+    job.normalized_mjai_object_key = normalized_key
+    db.commit()
+    return normalized_path
+
+
+def validate_explicit_majsoul_target_actor(job: ReviewJob) -> int:
+    if job.target_actor is not None:
+        actor = int(job.target_actor)
+    else:
+        if job.target_player_ref is None:
+            raise ReviewExecutionError(
+                "majsoul imports require target_player_ref because player seat cannot be auto-detected yet",
+            )
+        try:
+            actor = int(job.target_player_ref)
+        except ValueError as exc:
+            raise ReviewExecutionError("majsoul target_player_ref must be an integer within 0-3") from exc
+
+    if actor not in {0, 1, 2, 3}:
+        raise ReviewExecutionError("majsoul target_player_ref must be within 0-3")
+    return actor
+
+
 def load_events_from_file(file_path: Path) -> list[dict[str, Any]]:
     content = file_path.read_text(encoding="utf-8").strip()
     if not content:
@@ -335,12 +440,16 @@ def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
         return load_events_from_file(normalized_path)
 
     if source_type == "majsoul_url":
-        raise ReviewExecutionError("majsoul_url is not implemented yet")
+        normalized_path = ensure_majsoul_url_artifacts(db, job)
+        return load_events_from_file(normalized_path)
 
     raise ReviewExecutionError(f"unsupported source_type: {source_type}")
 
 
 def determine_target_actor(job: ReviewJob) -> int:
+    if job.source_type in {"majsoul_file", "majsoul_url"}:
+        return validate_explicit_majsoul_target_actor(job)
+
     if job.target_actor is not None:
         return int(job.target_actor)
     if job.target_player_ref is None:

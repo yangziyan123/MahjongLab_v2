@@ -231,7 +231,7 @@ def list_replay_sources() -> dict[str, list[ReplaySourceOption]]:
             ReplaySourceOption(key="tenhou_url", label="天凤链接", enabled=True),
             ReplaySourceOption(key="tenhou_id", label="天凤 ID", enabled=True),
             ReplaySourceOption(key="majsoul_file", label="雀魂导出文件", enabled=True),
-            ReplaySourceOption(key="majsoul_url", label="雀魂链接", enabled=False),
+            ReplaySourceOption(key="majsoul_url", label="雀魂链接", enabled=True),
         ]
     }
 

@@ -52,7 +52,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 - 不提供登录页
 - 仍按单用户本地模式运行
-- 已支持 `Tenhou URL / Tenhou ID / 雀魂导出文件 / mjai 文件 / JSON` 导入
+- 已支持 `Tenhou URL / Tenhou ID / 雀魂导出文件 / 雀魂 URL / mjai 文件 / JSON` 导入
 - 已支持从复盘报告加入错题库，并在错题库页回跳原报告
-- `Majsoul` 当前只支持导出文件导入，不支持 URL 直连
+- `Majsoul URL` 需要本机浏览器存在已登录雀魂的会话，并且仍需手动指定目标玩家座位
 - AI 对战页当前暂不可用

@@ -15,6 +15,7 @@
   - `tenhou_url`
   - `tenhou_id`
   - `majsoul_file`
+  - `majsoul_url`
 - 已实现：
   - `/api/health`
   - `/api/me`
@@ -66,6 +67,6 @@ python -m uvicorn app.main:app --reload
 
 ## 已知限制
 
-- `majsoul_url` 仍未实现
+- `Tenhou` 三麻牌谱仍未支持，当前复盘链路只支持四麻
 - `Tenhou` 下载成功率依赖外部网络和 `tenhou.net` 可达性
-- `Majsoul` 当前只支持“导出文件导入”，不支持 URL 直连抓取
+- `Majsoul URL` 需要本机存在已登录雀魂的 Chrome / Edge 配置文件；当前不会自动识别目标玩家座位，必须显式传入 `target_player_ref`

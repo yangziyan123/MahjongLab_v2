@@ -34,7 +34,6 @@ export function Home() {
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="text-3xl font-bold text-slate-900">MahjongLab</h1>
-              <p className="mt-2 text-slate-600">先把复盘做扎实，再把对战接上来。</p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
               当前用户:
@@ -46,7 +45,7 @@ export function Home() {
 
       <main className="container mx-auto px-4 py-12">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-10">
+          {/* <div className="mb-10">
             <Card className="bg-white/90 shadow-sm">
               <CardHeader>
                 <CardTitle>当前数据摘要</CardTitle>
@@ -71,8 +70,7 @@ export function Home() {
                 </div>
               </CardContent>
             </Card>
-          </div>
-
+          </div> */}
           <div className="mb-12 grid gap-8 md:grid-cols-2">
             <Card className="border-slate-200/80 bg-white/90 shadow-sm transition-shadow hover:shadow-lg">
               <CardHeader>
