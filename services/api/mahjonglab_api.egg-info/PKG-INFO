@@ -8,3 +8,13 @@ Requires-Dist: uvicorn<1.0,>=0.44
 Requires-Dist: sqlalchemy<3.0,>=2.0
 Requires-Dist: pydantic<3.0,>=2.10
 Requires-Dist: python-multipart<1.0,>=0.0.26
+Requires-Dist: playwright<2.0,>=1.58
+Provides-Extra: play
+Requires-Dist: numpy<2.0,>=1.25; extra == "play"
+Requires-Dist: h11<0.15,>=0.13; extra == "play"
+Requires-Dist: quart<1.0,>=0.19; extra == "play"
+Requires-Dist: termcolor<3.0,>=2.3; extra == "play"
+Requires-Dist: torch<3.0,>=2.0; extra == "play"
+Requires-Dist: tqdm<5.0,>=4.66; extra == "play"
+Requires-Dist: websockify<1.0,>=0.11; extra == "play"
+Requires-Dist: wsproto<1.3,>=1.2; extra == "play"

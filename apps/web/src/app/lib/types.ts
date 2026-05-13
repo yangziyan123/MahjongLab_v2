@@ -14,6 +14,43 @@ export interface UserProfile {
   timezone: string;
 }
 
+export interface CreatePlaySessionRequest {
+  username: string;
+  ai_level: "normal" | "hard";
+}
+
+export interface PlayServiceStatus {
+  name: string;
+  host: string;
+  port: number;
+  running: boolean;
+  reachable: boolean;
+  managed: boolean;
+  detail?: string | null;
+}
+
+export interface PlaySession {
+  session_id: string;
+  match_id: string;
+  username: string;
+  status: string;
+  host: string;
+  websocket_port: number;
+  web_port: number;
+  game_url: string;
+  launch_url: string;
+  services: PlayServiceStatus[];
+}
+
+export interface PlayMatch {
+  id: string;
+  status: string;
+  source: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DashboardSummary {
   review_count: number;
   completed_job_count: number;

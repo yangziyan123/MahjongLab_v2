@@ -19,6 +19,9 @@
 - 已实现：
   - `/api/health`
   - `/api/me`
+  - `/api/play/session`
+  - `/api/play/matches/{match_id}`
+  - `/api/play/matches/{match_id}/export`
   - `/api/dashboard/summary`
   - `/api/platforms/replay-sources`
   - `/api/uploads`
@@ -40,10 +43,21 @@
 
 - `Mortal/mortal/config.toml` 已存在
 - `cargo` 可用，且可读取 `mjai-reviewer/Cargo.toml`
+- 如需本地打牌功能，使用仓库根目录现有 `.venv` 安装对战依赖：
+
+```powershell
+..\..\.venv\Scripts\python.exe -m pip install -e .[play]
+```
+
+`Mahjong-AI` 默认读取仓库根目录下的 `Mahjong-AI`。也可以通过环境变量覆盖：
+
+- `MAHJONG_AI_ROOT`
+- `MAHJONG_AI_PYTHON`
+- `MAHJONG_AI_WEBSOCKIFY`
 
 ```powershell
 cd services/api
-python -m uvicorn app.main:app --reload
+..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 服务默认地址：
@@ -59,6 +73,7 @@ python -m uvicorn app.main:app --reload
 - `services/api/data/storage/normalized`
 - `services/api/data/storage/uploads`
 - `services/api/data/storage/reviews`
+- `services/api/data/play_launcher`
 
 其中 `Tenhou` 导入链路会额外写入：
 

@@ -1,8 +1,11 @@
 import type {
+  CreatePlaySessionRequest,
   CreateReviewJobRequest,
   DashboardSummary,
   MistakeItem,
   PaginatedMistakeItems,
+  PlayMatch,
+  PlaySession,
   PaginatedReviewEntries,
   PaginatedReviews,
   ReplaySourceOption,
@@ -71,6 +74,25 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getMe() {
   return apiRequest<UserProfile>("/api/me");
+}
+
+export function getPlaySession() {
+  return apiRequest<PlaySession | null>("/api/play/session");
+}
+
+export function createPlaySession(payload: CreatePlaySessionRequest) {
+  return apiRequest<PlaySession>("/api/play/session", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getPlayMatch(matchId: string) {
+  return apiRequest<PlayMatch>(`/api/play/matches/${matchId}`);
+}
+
+export function getPlayMatchExportUrl(matchId: string) {
+  return `/api/play/matches/${matchId}/export`;
 }
 
 export function getDashboardSummary() {

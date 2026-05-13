@@ -10,6 +10,7 @@ from app.review_engine import (
     determine_target_actor,
     is_tenhou_sanma_log,
     parse_tenhou_log_payload,
+    run_fallback_review,
     validate_tenhou_log_payload,
 )
 
@@ -78,6 +79,26 @@ class TargetActorValidationTests(unittest.TestCase):
         job = SimpleNamespace(source_type="majsoul_file", target_actor=None, target_player_ref="2")
 
         self.assertEqual(determine_target_actor(job), 2)
+
+
+class FallbackReviewTests(unittest.TestCase):
+    def test_fallback_review_keeps_internal_match_reviewable_without_engine(self) -> None:
+        result = run_fallback_review(
+            [
+                {"type": "start_game"},
+                {"type": "start_kyoku", "honba": 0},
+                {"type": "tsumo", "actor": 0, "pai": "1m"},
+                {"type": "dahai", "actor": 0, "pai": "1m", "tsumogiri": True},
+                {"type": "end_kyoku"},
+            ],
+            target_actor=0,
+            reason="test",
+        )
+
+        self.assertEqual(result.engine_name, "mjai-reviewer-lite")
+        self.assertEqual(result.summary["reviewed_decision_count"], 1)
+        self.assertEqual(result.entries[0].decision_type, "discard")
+        self.assertTrue(result.entries[0].is_match)
 
 
 if __name__ == "__main__":

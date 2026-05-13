@@ -24,9 +24,15 @@
 *.sqlite
 *.sqlite3
 *.log
+Mahjong-AI/model/saved/
 
 # IDE / OS
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+
+# docs
+101-概要设计说明书(模版).docx
+概要设计说明书.md
+概要设计说明书.pdf

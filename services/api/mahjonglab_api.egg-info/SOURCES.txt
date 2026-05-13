@@ -5,7 +5,9 @@ app/config.py
 app/database.py
 app/jobs.py
 app/main.py
+app/majsoul_url_import.py
 app/models.py
+app/play_launcher.py
 app/review_engine.py
 app/schemas.py
 mahjonglab_api.egg-info/PKG-INFO
@@ -13,3 +15,4 @@ mahjonglab_api.egg-info/SOURCES.txt
 mahjonglab_api.egg-info/dependency_links.txt
 mahjonglab_api.egg-info/requires.txt
 mahjonglab_api.egg-info/top_level.txt
+tests/test_review_engine.py

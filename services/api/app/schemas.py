@@ -32,6 +32,43 @@ class UserProfile(BaseModel):
     timezone: str
 
 
+class CreatePlaySessionRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=32)
+    ai_level: str = Field(default="normal", pattern="^(normal|hard)$")
+
+
+class PlayServiceStatus(BaseModel):
+    name: str
+    host: str
+    port: int
+    running: bool
+    reachable: bool
+    managed: bool
+    detail: str | None = None
+
+
+class PlaySessionOut(BaseModel):
+    session_id: str
+    match_id: str
+    username: str
+    status: str
+    host: str
+    websocket_port: int
+    web_port: int
+    game_url: str
+    launch_url: str
+    services: list[PlayServiceStatus]
+
+
+class PlayMatchOut(BaseModel):
+    id: str
+    status: str
+    source: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class CreateReviewJobRequest(BaseModel):
     source_type: str
     platform: str | None = None

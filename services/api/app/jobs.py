@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 from .config import settings
 from .database import SessionLocal
-from .models import Review, ReviewEntry, ReviewJob
+from .models import Match, Review, ReviewEntry, ReviewJob
 from .review_engine import ReviewExecutionError, execute_review_job
 
 executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="review-job")
@@ -49,13 +49,20 @@ def process_review_job(job_id: str) -> None:
         db.commit()
 
         result = execute_review_job(db, job)
+        target_player_label = job.target_player_ref
+        if job.match_id:
+            match = db.get(Match, job.match_id)
+            if match is not None and isinstance(match.source_json, dict):
+                username = match.source_json.get("username")
+                if isinstance(username, str) and username.strip():
+                    target_player_label = username.strip()
         review = Review(
             job_id=job.id,
             user_id=job.user_id,
             match_id=job.match_id,
             platform=job.platform,
             target_actor=result.target_actor,
-            target_player_label=job.target_player_ref,
+            target_player_label=target_player_label,
             engine_name=result.engine_name,
             engine_version=result.engine_version,
             model_tag=result.model_tag,

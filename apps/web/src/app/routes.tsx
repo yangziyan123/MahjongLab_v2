@@ -5,7 +5,10 @@ import { ReviewTask } from "./pages/review/ReviewTask";
 import { ReviewReport } from "./pages/review/ReviewReport";
 import { ReviewHistory } from "./pages/review/ReviewHistory";
 import { MistakeLibrary } from "./pages/training/MistakeLibrary";
-import { PlayComingSoon } from "./pages/play/PlayComingSoon";
+import { PlayConfig } from "./pages/play/PlayConfig";
+import { PlayGame } from "./pages/play/PlayGame";
+import { PlayHistory } from "./pages/play/PlayHistory";
+import { PlayResult } from "./pages/play/PlayResult";
 import { NotFound } from "./pages/NotFound";
 
 export const router = createBrowserRouter([
@@ -35,19 +38,19 @@ export const router = createBrowserRouter([
   },
   {
     path: "/play/config",
-    Component: PlayComingSoon,
+    Component: PlayConfig,
   },
   {
     path: "/play/game/:roomId",
-    Component: PlayComingSoon,
+    Component: PlayGame,
   },
   {
     path: "/play/result/:sessionId",
-    Component: PlayComingSoon,
+    Component: PlayResult,
   },
   {
     path: "/play/history",
-    Component: PlayComingSoon,
+    Component: PlayHistory,
   },
   {
     path: "*",

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -12,12 +13,16 @@ from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .jobs import enqueue_review_job
 from .models import MistakeItem, Review, ReviewEntry, ReviewJob, User
+from .play_launcher import MahjongAiLauncher
 from .schemas import (
+    CreatePlaySessionRequest,
     CreateMistakeItemRequest,
     CreateReviewJobRequest,
     DashboardSummary,
     MistakeItemOut,
     PaginatedMistakeItems,
+    PlayMatchOut,
+    PlaySessionOut,
     PaginatedReviewEntries,
     PaginatedReviews,
     ReplaySourceOption,
@@ -30,6 +35,7 @@ from .schemas import (
 )
 
 app = FastAPI(title="MahjongLab API", version="0.1.0")
+play_launcher = MahjongAiLauncher(settings)
 
 
 def utcnow() -> datetime:
@@ -205,6 +211,41 @@ def health() -> dict[str, str]:
 def get_me(db: Session = Depends(get_db)) -> UserProfile:
     user = get_or_create_default_user(db)
     return UserProfile(id=user.id, display_name=user.display_name, locale=user.locale, timezone=user.timezone)
+
+
+@app.get("/api/play/session", response_model=PlaySessionOut | None, response_model_by_alias=False)
+def get_play_session() -> PlaySessionOut | None:
+    return play_launcher.get_status()
+
+
+@app.post("/api/play/session", response_model=PlaySessionOut, response_model_by_alias=False)
+def create_play_session(payload: CreatePlaySessionRequest) -> PlaySessionOut:
+    try:
+        return play_launcher.ensure_running(payload.username, payload.ai_level)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/play/matches/{match_id}", response_model=PlayMatchOut, response_model_by_alias=False)
+def get_play_match(match_id: str) -> PlayMatchOut:
+    match = play_launcher.get_match(match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="match not found")
+    return match
+
+
+@app.get("/api/play/matches/{match_id}/export")
+def export_play_match(match_id: str) -> PlainTextResponse:
+    try:
+        content = play_launcher.export_match_events_jsonl(match_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return PlainTextResponse(
+        content=content,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="match-{match_id}.jsonl"'},
+    )
 
 
 @app.get("/api/dashboard/summary", response_model=DashboardSummary, response_model_by_alias=False)

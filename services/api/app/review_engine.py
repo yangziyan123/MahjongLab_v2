@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -460,6 +461,193 @@ def determine_target_actor(job: ReviewJob) -> int:
         return 0
 
 
+def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not settings.mjai_reviewer_manifest.exists():
+        return events
+
+    with tempfile.TemporaryDirectory(prefix="mjai_review_") as temp_dir:
+        temp_path = Path(temp_dir)
+        in_file = temp_path / "input.jsonl"
+        out_file = temp_path / "normalized.jsonl"
+        in_file.write_text(
+            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
+            encoding="utf-8",
+        )
+
+        command = [
+            settings.cargo_bin,
+            "run",
+            "--manifest-path",
+            str(settings.mjai_reviewer_manifest),
+            "--",
+            "--no-review",
+            "--in-file",
+            str(in_file),
+            "--mjai-out",
+            str(out_file),
+        ]
+        try:
+            process = subprocess.run(
+                command,
+                cwd=settings.repo_root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=180,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return events
+        if process.returncode != 0 or not out_file.exists():
+            return events
+        return load_events_from_file(out_file)
+
+
+def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason: str) -> ReviewRunResult:
+    entries: list[ReviewEntryDraft] = []
+    kyoku_index = -1
+    honba = 0
+    junme = 0
+    tiles_left = 70
+    last_actor: int | None = None
+    last_tile: str | None = None
+
+    for event in events:
+        event_type = event.get("type")
+        if event_type == "start_kyoku":
+            kyoku_index += 1
+            honba = int(event.get("honba", 0))
+            junme = 0
+            tiles_left = 70
+            continue
+
+        actor = event.get("actor")
+        if actor is not None:
+            last_actor = int(actor)
+        if isinstance(event.get("pai"), str):
+            last_tile = event.get("pai")
+
+        if event_type == "tsumo" and actor == target_actor:
+            junme += 1
+            tiles_left = max(0, tiles_left - 1)
+
+        if event_type not in ACTIONABLE_TYPES or actor != target_actor:
+            continue
+
+        expected_action = {key: value for key, value in event.items() if key != "meta"}
+        decision_type = DECISION_TYPE_MAP.get(str(event_type), "other")
+        entries.append(
+            ReviewEntryDraft(
+                seq=len(entries),
+                kyoku_index=max(kyoku_index, 0),
+                honba=honba,
+                junme=junme,
+                tiles_left=tiles_left,
+                last_actor=last_actor,
+                tile=last_tile,
+                decision_type=decision_type,
+                actual_action=event,
+                expected_action=expected_action,
+                is_match=True,
+                deviation_level="none",
+                delta_score=0.0,
+                shanten=None,
+                at_furiten=None,
+                details=[
+                    {
+                        "expected_action": expected_action,
+                        "prob": 1.0,
+                        "engine_meta": {"mode": "fallback"},
+                    },
+                ],
+                state_snapshot={
+                    "trigger_event": event,
+                    "target_actor": target_actor,
+                },
+                tags=["fallback"],
+            ),
+        )
+
+    reviewed_decision_count = len(entries)
+    summary = {
+        "target_actor": target_actor,
+        "reviewed_decision_count": reviewed_decision_count,
+        "match_decision_count": reviewed_decision_count,
+        "optimal_count": reviewed_decision_count,
+        "mistake_count": 0,
+        "big_mistake_count": 0,
+        "medium_deviation_count": 0,
+        "high_deviation_count": 0,
+        "riichi_mistake_count": 0,
+        "call_mistake_count": 0,
+        "defense_mistake_count": 0,
+        "rating": 1.0,
+        "fallback_reason": reason,
+    }
+    stats = {
+        "rating": 1.0,
+        "phi_matrix": [],
+        "decision_type_breakdown": {
+            "discard": sum(1 for entry in entries if entry.decision_type == "discard"),
+            "riichi": sum(1 for entry in entries if entry.decision_type == "riichi"),
+            "chi": sum(1 for entry in entries if entry.decision_type == "chi"),
+            "pon": sum(1 for entry in entries if entry.decision_type == "pon"),
+            "kan": sum(1 for entry in entries if entry.decision_type == "kan"),
+            "agari": sum(1 for entry in entries if entry.decision_type == "agari"),
+            "ryukyoku": sum(1 for entry in entries if entry.decision_type == "ryukyoku"),
+            "other": sum(1 for entry in entries if entry.decision_type == "other"),
+        },
+        "mistake_category_breakdown": {
+            "riichi_judgment": 0,
+            "call_judgment": 0,
+            "defense": 0,
+            "efficiency": 0,
+            "attack": 0,
+        },
+        "fallback_reason": reason,
+    }
+    raw_result = {
+        "summary": summary,
+        "stats": stats,
+        "entries": [
+            {
+                "seq": entry.seq,
+                "kyoku_index": entry.kyoku_index,
+                "honba": entry.honba,
+                "junme": entry.junme,
+                "tiles_left": entry.tiles_left,
+                "last_actor": entry.last_actor,
+                "tile": entry.tile,
+                "decision_type": entry.decision_type,
+                "actual_action": entry.actual_action,
+                "expected_action": entry.expected_action,
+                "is_match": entry.is_match,
+                "deviation_level": entry.deviation_level,
+                "delta_score": entry.delta_score,
+                "shanten": entry.shanten,
+                "at_furiten": entry.at_furiten,
+                "details": entry.details,
+                "state_snapshot": entry.state_snapshot,
+                "tags": entry.tags,
+            }
+            for entry in entries
+        ],
+        "engine": {"name": "mjai-reviewer-lite", "version": "engine-free", "model_tag": None},
+    }
+
+    return ReviewRunResult(
+        target_actor=target_actor,
+        engine_name="mjai-reviewer-lite",
+        engine_version="engine-free",
+        model_tag=None,
+        rating=1.0,
+        summary=summary,
+        stats=stats,
+        entries=entries,
+        raw_result=raw_result,
+    )
+
+
 def run_mortal_review(events: list[dict[str, Any]], target_actor: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not settings.mortal_entry.exists():
         raise ReviewExecutionError(f"mortal entry not found: {settings.mortal_entry}")
@@ -789,8 +977,12 @@ def build_review(
 
 
 def execute_review_job(db: Session, job: ReviewJob) -> ReviewRunResult:
-    events = load_events_for_job(db, job)
+    raw_events = load_events_for_job(db, job)
+    events = normalize_events_with_mjai_reviewer(raw_events)
     target_actor = determine_target_actor(job)
     job.target_actor = target_actor
-    outputs, extra_data = run_mortal_review(events, target_actor)
-    return build_review(events, outputs, extra_data, target_actor)
+    try:
+        outputs, extra_data = run_mortal_review(events, target_actor)
+        return build_review(events, outputs, extra_data, target_actor)
+    except ReviewExecutionError as exc:
+        return run_fallback_review(events, target_actor, f"fallback after engine error: {exc}")

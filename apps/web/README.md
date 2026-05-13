@@ -10,7 +10,10 @@
 - `/review/history`
 - `/review/report/:reportId`
 - `/training/mistakes`
-- `/play/*` 入口页
+- `/play/config`
+- `/play/game/:roomId`
+- `/play/result/:sessionId`
+- `/play/history`
 
 ## 技术栈
 
@@ -27,7 +30,7 @@
 
 ```powershell
 cd services\api
-python -m uvicorn app.main:app --reload
+..\..\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
 再启动前端：
@@ -55,4 +58,4 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 - 已支持 `Tenhou URL / Tenhou ID / 雀魂导出文件 / 雀魂 URL / mjai 文件 / JSON` 导入
 - 已支持从复盘报告加入错题库，并在错题库页回跳原报告
 - `Majsoul URL` 需要本机浏览器存在已登录雀魂的会话，并且仍需手动指定目标玩家座位
-- AI 对战页当前暂不可用
+- AI 对战页会通过后端启动根目录下的 `Mahjong-AI`

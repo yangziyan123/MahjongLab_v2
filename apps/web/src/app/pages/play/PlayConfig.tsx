@@ -1,256 +1,172 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
+import { ArrowLeft, Bot, ExternalLink, LoaderCircle, PlayCircle, Server } from "lucide-react";
+
+import { ApiError, createPlaySession } from "../../lib/api";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
-import { Switch } from "../../components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
-import { ArrowLeft, Settings, Zap } from "lucide-react";
 
 export function PlayConfig() {
   const navigate = useNavigate();
-  const [useTemplate, setUseTemplate] = useState(true);
+  const [username, setUsername] = useState("User1");
+  const [aiLevel, setAiLevel] = useState<"normal" | "hard">("normal");
+  const [isStarting, setIsStarting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleStartGame = () => {
-    const roomId = `room-${Date.now()}`;
-    navigate(`/play/game/${roomId}`);
+  const handleStartGame = async () => {
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) {
+      setErrorMessage("请输入用户名后再开始对局。");
+      return;
+    }
+
+    setIsStarting(true);
+    setErrorMessage(null);
+
+    try {
+      const session = await createPlaySession({ username: trimmedUsername, ai_level: aiLevel });
+      navigate(`/play/game/${session.session_id}`, {
+        state: { session },
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorMessage(error.detail);
+      } else {
+        setErrorMessage("启动 Mahjong-AI 失败，请检查本机 Python 依赖、websockify 和端口状态。");
+      }
+    } finally {
+      setIsStarting(false);
+    }
   };
+
+  if (isStarting) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-white">
+        <div className="w-full max-w-lg rounded-xl border border-slate-800 bg-slate-900 p-8 text-center shadow-2xl">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-blue-500/15">
+            <LoaderCircle className="h-7 w-7 animate-spin text-blue-400" />
+          </div>
+          <h1 className="text-2xl font-bold">正在启动对局</h1>
+          <p className="mt-3 text-sm text-slate-300">
+            正在拉起 Mahjong-AI 服务并准备对战页面，请稍候。
+          </p>
+          <div className="mt-6 rounded-lg border border-slate-800 bg-slate-950/70 p-4 text-left text-sm text-slate-400">
+            <div>用户名：{username.trim() || "未填写"}</div>
+            <div className="mt-1">AI 难度：{aiLevel === "hard" ? "进阶" : "普通"}</div>
+            <div className="mt-1">流程：启动服务 / 建立桥接 / 进入对局页</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Header */}
       <header className="border-b bg-white shadow-sm">
-        <div className="container mx-auto px-4 py-4 flex items-center">
-          <Link to="/">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
+        <div className="container mx-auto flex items-center px-4 py-4">
+          <Button asChild variant="ghost" size="sm">
+            <Link to="/">
+              <ArrowLeft className="mr-2 h-4 w-4" />
               返回首页
-            </Button>
-          </Link>
-          <h1 className="text-2xl font-bold text-slate-900 ml-4">创建对战房间</h1>
+            </Link>
+          </Button>
+          <h1 className="ml-4 text-2xl font-bold text-slate-900">创建对战房间</h1>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
+        <div className="mx-auto max-w-4xl">
           <Card>
             <CardHeader>
-              <CardTitle>房间配置</CardTitle>
+              <CardTitle>启动本地对战</CardTitle>
               <CardDescription>
-                配置对局规则和 AI 对手，开始您的训练
+                MahjongLab 会通过后端启动 Mahjong-AI 对战服务，并把网页客户端嵌入当前平台。
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              {/* Template Toggle */}
-              <div className="flex items-center justify-between mb-6 p-4 bg-blue-50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Zap className="w-5 h-5 text-blue-600" />
-                  <div>
-                    <div className="font-semibold text-slate-900">使用预设模板</div>
-                    <div className="text-sm text-slate-600">快速开始常用规则的对局</div>
-                  </div>
-                </div>
-                <Switch
-                  checked={useTemplate}
-                  onCheckedChange={setUseTemplate}
-                />
-              </div>
+            <CardContent className="space-y-6">
+              <div className="grid gap-6 md:grid-cols-2">
+                <div className="space-y-3">
+                  <Label htmlFor="username">用户名</Label>
+                  <Input
+                    id="username"
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
+                    placeholder="例如 User1"
+                    maxLength={32}
+                  />
+                  <p className="text-sm text-slate-500">
+                    进入对局时会自动传入这个用户名。
+                  </p>
 
-              <Tabs defaultValue={useTemplate ? "template" : "custom"} className="space-y-6">
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="template" disabled={!useTemplate}>
-                    预设模板
-                  </TabsTrigger>
-                  <TabsTrigger value="custom" disabled={useTemplate}>
-                    自定义配置
-                  </TabsTrigger>
-                </TabsList>
-
-                {/* Template Mode */}
-                <TabsContent value="template" className="space-y-6">
-                  <div>
-                    <Label>选择模板</Label>
-                    <Select defaultValue="tonpu">
-                      <SelectTrigger className="mt-2">
-                        <SelectValue />
+                  <div className="space-y-2 pt-2">
+                    <Label>AI 难度</Label>
+                    <Select value={aiLevel} onValueChange={(value) => setAiLevel(value as "normal" | "hard")}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择难度" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="tonpu">东风场 - 标准规则</SelectItem>
-                        <SelectItem value="hanchan">半庄场 - 标准规则</SelectItem>
-                        <SelectItem value="defensive">防守训练模板</SelectItem>
-                        <SelectItem value="riichi">立直判断训练</SelectItem>
+                        <SelectItem value="normal">普通</SelectItem>
+                        <SelectItem value="hard">进阶</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
-                </TabsContent>
+                </div>
 
-                {/* Custom Mode */}
-                <TabsContent value="custom" className="space-y-6">
-                  <div className="grid md:grid-cols-2 gap-6">
-                    <div>
-                      <Label htmlFor="kyoku">场次</Label>
-                      <Select defaultValue="tonpu">
-                        <SelectTrigger className="mt-2">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="tonpu">东风场</SelectItem>
-                          <SelectItem value="hanchan">半庄场</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div>
-                      <Label htmlFor="startPoints">初始点数</Label>
-                      <Input
-                        id="startPoints"
-                        type="number"
-                        defaultValue="25000"
-                        className="mt-2"
-                      />
-                    </div>
-
-                    <div>
-                      <Label htmlFor="timeLimit">时间限制（秒）</Label>
-                      <Input
-                        id="timeLimit"
-                        type="number"
-                        defaultValue="10"
-                        className="mt-2"
-                      />
-                    </div>
-
-                    <div>
-                      <Label htmlFor="akaDora">赤宝牌</Label>
-                      <Select defaultValue="3">
-                        <SelectTrigger className="mt-2">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="0">无赤宝</SelectItem>
-                          <SelectItem value="3">3张赤宝（各1张）</SelectItem>
-                          <SelectItem value="4">4张赤宝（五万2张）</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  <div className="mb-2 flex items-center gap-2 font-semibold text-slate-900">
+                    <Server className="h-4 w-4" />
+                    启动内容
                   </div>
-
-                  {/* Additional Rules */}
-                  <div className="space-y-4 pt-4 border-t">
-                    <Label>其他规则</Label>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm">食断（副露断幺九）</span>
-                        <Switch defaultChecked />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm">后付（后付和了）</span>
-                        <Switch defaultChecked />
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm">南入（南四局延长）</span>
-                        <Switch />
-                      </div>
-                    </div>
-                  </div>
-                </TabsContent>
-              </Tabs>
-
-              {/* AI Configuration */}
-              <div className="space-y-6 pt-6 border-t mt-6">
-                <div className="flex items-center gap-2">
-                  <Settings className="w-5 h-5" />
-                  <h3 className="font-semibold text-slate-900">AI 对手配置</h3>
-                </div>
-
-                <div>
-                  <Label>AI 数量</Label>
-                  <Select defaultValue="3">
-                    <SelectTrigger className="mt-2">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">1 个 AI（三人对战）</SelectItem>
-                      <SelectItem value="2">2 个 AI</SelectItem>
-                      <SelectItem value="3">3 个 AI（全 AI 对手）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label>AI 难度</Label>
-                  <Select defaultValue="medium">
-                    <SelectTrigger className="mt-2">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="easy">初级 - 适合新手练习</SelectItem>
-                      <SelectItem value="medium">中级 - 平衡型对手</SelectItem>
-                      <SelectItem value="hard">高级 - 接近顶级水平</SelectItem>
-                      <SelectItem value="mixed">混合 - 不同难度组合</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div>
-                  <Label>训练目标（可选）</Label>
-                  <Select defaultValue="none">
-                    <SelectTrigger className="mt-2">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">无特定目标</SelectItem>
-                      <SelectItem value="attack">进攻训练 - 快速和牌</SelectItem>
-                      <SelectItem value="defense">防守训练 - 避免放铳</SelectItem>
-                      <SelectItem value="riichi">立直判断训练</SelectItem>
-                      <SelectItem value="tile-efficiency">牌效训练</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div>Mahjong-AI socket 服务</div>
+                  <div>WebSocket 桥接服务</div>
+                  <div>网页客户端静态服务</div>
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex gap-4 mt-8 pt-6 border-t">
-                <Button
-                  onClick={handleStartGame}
-                  className="flex-1"
-                  size="lg"
-                >
+              {errorMessage ? (
+                <Alert variant="destructive">
+                  <AlertTitle>启动失败</AlertTitle>
+                  <AlertDescription>{errorMessage}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5">
+                  <div className="flex items-start gap-3">
+                    <Bot className="mt-0.5 h-5 w-5 text-blue-600" />
+                    <div>
+                      <div className="font-semibold text-slate-900">固定对战形态</div>
+                      <div className="mt-1 text-sm text-slate-600">
+                        当前接入 3 AI + 1 人类玩家的本地日麻对战。
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5">
+                  <div className="flex items-start gap-3">
+                    <ExternalLink className="mt-0.5 h-5 w-5 text-emerald-600" />
+                    <div>
+                      <div className="font-semibold text-slate-900">进入方式</div>
+                      <div className="mt-1 text-sm text-slate-600">
+                        启动完成后会在 MahjongLab 对战页中嵌入游戏画面。
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-4 border-t pt-6">
+                <Button onClick={handleStartGame} className="flex-1" size="lg" disabled={isStarting}>
+                  <PlayCircle className="mr-2 h-4 w-4" />
                   开始对局
                 </Button>
-                <Link to="/" className="flex-1">
-                  <Button variant="outline" className="w-full" size="lg">
-                    取消
-                  </Button>
-                </Link>
-              </div>
-
-              {/* Recent Templates */}
-              <div className="mt-6 pt-6 border-t">
-                <h3 className="font-semibold text-slate-900 mb-4">最近使用的配置</h3>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
-                    <div>
-                      <div className="font-medium text-sm">东风场 - 中级 AI</div>
-                      <div className="text-xs text-slate-600">2 天前使用</div>
-                    </div>
-                    <Button variant="ghost" size="sm">
-                      使用
-                    </Button>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg hover:bg-slate-100 cursor-pointer">
-                    <div>
-                      <div className="font-medium text-sm">防守训练模板</div>
-                      <div className="text-xs text-slate-600">5 天前使用</div>
-                    </div>
-                    <Button variant="ghost" size="sm">
-                      使用
-                    </Button>
-                  </div>
-                </div>
+                <Button asChild variant="outline" className="flex-1" size="lg">
+                  <Link to="/">取消</Link>
+                </Button>
               </div>
             </CardContent>
           </Card>
