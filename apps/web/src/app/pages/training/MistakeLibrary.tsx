@@ -204,8 +204,18 @@ export function MistakeLibrary() {
 
           {mistakesQuery.isError && (
             <Card>
-              <CardContent className="py-12 text-center text-red-600">
-                {mistakesQuery.error instanceof Error ? mistakesQuery.error.message : "Failed to load mistakes."}
+              <CardContent className="py-12 text-center">
+                <div className="text-red-600">
+                  {mistakesQuery.error instanceof Error ? mistakesQuery.error.message : "无法读取错题库。"}
+                </div>
+                <div className="mt-4 flex justify-center gap-2">
+                  <Button variant="outline" onClick={() => window.location.reload()}>
+                    重试
+                  </Button>
+                  <Button asChild>
+                    <Link to="/review/history">返回历史报告</Link>
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           )}
@@ -276,7 +286,12 @@ export function MistakeLibrary() {
                             回到报告
                           </Button>
                         </Link>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(item.id)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`从错题库移除 ${formatKyokuLabel(item.kyoku_index, item.honba)} 第 ${item.junme} 巡`}
+                          onClick={() => handleDelete(item.id)}
+                        >
                           <Trash2 className="h-4 w-4 text-red-600" />
                         </Button>
                       </div>

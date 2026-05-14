@@ -40,6 +40,17 @@ function formatScore(score: unknown) {
     .join(" / ");
 }
 
+function formatMatchStatus(status: string) {
+  const labels: Record<string, string> = {
+    created: "已创建",
+    running: "对局中",
+    round_finished: "小局已结束",
+    completed: "已完成",
+    failed: "失败",
+  };
+  return labels[status] ?? status;
+}
+
 export function PlayResult() {
   const { sessionId: matchId = "" } = useParams();
   const navigate = useNavigate();
@@ -67,7 +78,10 @@ export function PlayResult() {
   if (matchQuery.isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <LoaderCircle className="h-8 w-8 animate-spin text-slate-500" />
+        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-slate-500 shadow-sm">
+          <LoaderCircle className="h-5 w-5 animate-spin" />
+          <span>正在读取对局结果...</span>
+        </div>
       </div>
     );
   }
@@ -88,7 +102,17 @@ export function PlayResult() {
         </header>
         <main className="container mx-auto px-4 py-8">
           <Card>
-            <CardContent className="py-12 text-center text-red-600">{detail}</CardContent>
+            <CardContent className="py-12 text-center">
+              <div className="text-red-600">{detail}</div>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button variant="outline" onClick={() => window.location.reload()}>
+                  重试
+                </Button>
+                <Button asChild>
+                  <Link to="/play/config">返回入口</Link>
+                </Button>
+              </div>
+            </CardContent>
           </Card>
         </main>
       </div>
@@ -149,7 +173,7 @@ export function PlayResult() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-slate-700">
             <div>对局 ID：{match.id}</div>
-            <div>状态：{match.status}</div>
+            <div>状态：{formatMatchStatus(match.status)}</div>
             <div>记录事件：{match.event_count}</div>
             <div>可复盘事件：{match.reviewable_event_count}</div>
             <div>已结算小局：{match.completed_kyoku_count}</div>

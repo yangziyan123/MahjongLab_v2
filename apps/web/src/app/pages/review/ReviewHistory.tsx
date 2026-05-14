@@ -168,7 +168,25 @@ export function ReviewHistory() {
             </Card>
           )}
 
-          {pagedReviews.length > 0 && (
+          {reviewsQuery.isError && (
+            <Card>
+              <CardContent className="py-12 text-center">
+                <div className="text-red-600">
+                  {reviewsQuery.error instanceof Error ? reviewsQuery.error.message : "无法读取历史复盘。"}
+                </div>
+                <div className="mt-4 flex justify-center gap-2">
+                  <Button variant="outline" onClick={() => window.location.reload()}>
+                    重试
+                  </Button>
+                  <Button asChild>
+                    <Link to="/review/import">新建复盘</Link>
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {!reviewsQuery.isError && pagedReviews.length > 0 && (
             <div className="space-y-4">
               {pagedReviews.map((report) => (
                 <Card key={report.id} className="transition-shadow hover:shadow-md">
@@ -211,7 +229,12 @@ export function ReviewHistory() {
                             查看
                           </Button>
                         </Link>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(report.id)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={`删除 ${report.target_player_label || `玩家 ${report.target_actor}`} 的复盘报告`}
+                          onClick={() => handleDelete(report.id)}
+                        >
                           <Trash2 className="h-4 w-4 text-red-600" />
                         </Button>
                       </div>
@@ -222,7 +245,7 @@ export function ReviewHistory() {
             </div>
           )}
 
-          {!reviewsQuery.isLoading && filteredReviews.length === 0 && (
+          {!reviewsQuery.isLoading && !reviewsQuery.isError && filteredReviews.length === 0 && (
             <Card>
               <CardContent className="py-16 text-center">
                 <FileText className="mx-auto mb-4 h-12 w-12 text-slate-300" />

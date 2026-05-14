@@ -21,7 +21,7 @@ export function ReviewOpen() {
   if (reviewQuery.isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 text-slate-500">
-        正在读取复盘...
+        <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">正在读取复盘...</div>
       </div>
     );
   }
@@ -42,7 +42,17 @@ export function ReviewOpen() {
         </header>
         <main className="container mx-auto px-4 py-8">
           <Card>
-            <CardContent className="py-12 text-center text-red-600">无法读取这份复盘。</CardContent>
+            <CardContent className="py-12 text-center">
+              <div className="text-red-600">无法读取这份复盘。</div>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button variant="outline" onClick={() => window.location.reload()}>
+                  重试
+                </Button>
+                <Button asChild>
+                  <Link to="/review/history">返回历史</Link>
+                </Button>
+              </div>
+            </CardContent>
           </Card>
         </main>
       </div>
@@ -98,11 +108,11 @@ export function ReviewOpen() {
                 <CardDescription>按决策点一步步推进牌桌，对照你的动作和 AI 推荐。</CardDescription>
               </CardHeader>
               <CardContent>
-                <Link to={`/review/replay/${reportId}${entryQuery}`}>
-                  <Button className="w-full" size="lg">
+                <Button asChild className="w-full" size="lg">
+                  <Link to={`/review/replay/${reportId}${entryQuery}`}>
                     进入逐步复盘
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
 
@@ -115,11 +125,11 @@ export function ReviewOpen() {
                 <CardDescription>查看摘要、筛选器、候选动作、错题库标记和完整分析信息。</CardDescription>
               </CardHeader>
               <CardContent>
-                <Link to={`/review/report/${reportId}${entryQuery}`}>
-                  <Button className="w-full" variant="outline" size="lg">
+                <Button asChild className="w-full" variant="outline" size="lg">
+                  <Link to={`/review/report/${reportId}${entryQuery}`}>
                     查看报告
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           </div>

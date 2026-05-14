@@ -4,32 +4,22 @@ import { AlertCircle } from "lucide-react";
 
 export function NotFound() {
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-      <div className="text-center px-4">
-        <AlertCircle className="w-16 h-16 text-slate-400 mx-auto mb-4" />
-        <h1 className="text-6xl font-bold text-slate-900 mb-4">404</h1>
-        <h2 className="text-2xl font-semibold text-slate-700 mb-4">
-          页面未找到
-        </h2>
-        <p className="text-slate-600 mb-8">
-          抱歉，您访问的页面不存在或已被移除
-        </p>
-        <div className="flex gap-4 justify-center">
-          <Link to="/">
-            <Button size="lg">
-              返回首页
-            </Button>
-          </Link>
-          <Link to="/review/import">
-            <Button variant="outline" size="lg">
-              AI 复盘
-            </Button>
-          </Link>
-          <Link to="/play/config">
-            <Button variant="outline" size="lg">
-              AI 对战
-            </Button>
-          </Link>
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
+      <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <AlertCircle className="mx-auto mb-4 h-12 w-12 text-slate-300" />
+        <h1 className="mb-2 text-5xl font-bold text-slate-900">404</h1>
+        <h2 className="mb-3 text-xl font-semibold text-slate-800">页面未找到</h2>
+        <p className="mb-8 text-slate-600">这个地址不存在，或对应页面已经被移动。</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Button asChild size="lg">
+            <Link to="/">返回首页</Link>
+          </Button>
+          <Button asChild variant="outline" size="lg">
+            <Link to="/review/import">AI 复盘</Link>
+          </Button>
+          <Button asChild variant="outline" size="lg">
+            <Link to="/play/config">AI 对战</Link>
+          </Button>
         </div>
       </div>
     </div>

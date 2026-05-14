@@ -435,7 +435,7 @@ def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
         events = [row.payload_json for row in db.scalars(stmt).all()]
         if not events:
             raise ReviewExecutionError(f"no match events found for match_id={match_id}")
-        return events
+        return normalize_internal_match_events_for_mjai(events)
 
     if source_type in {"tenhou_url", "tenhou_id"}:
         normalized_path = ensure_tenhou_artifacts(db, job)
@@ -495,6 +495,75 @@ def normalize_dora_markers(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
     return []
+
+
+def normalize_start_kyoku_event_for_mjai(event: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized = dict(event)
+
+    dora_markers = normalize_dora_markers(normalized.get("dora_marker"))
+    if dora_markers:
+        normalized["dora_marker"] = dora_markers[0]
+    elif "dora_marker" not in normalized:
+        normalized["dora_marker"] = "?"
+
+    scores = normalized.get("scores")
+    if isinstance(scores, list):
+        fixed_scores = []
+        for score in scores[:4]:
+            try:
+                fixed_scores.append(int(score))
+            except (TypeError, ValueError):
+                fixed_scores.append(25000)
+    else:
+        fixed_scores = []
+    while len(fixed_scores) < 4:
+        fixed_scores.append(25000)
+    normalized["scores"] = fixed_scores
+
+    synthetic_events: list[dict[str, Any]] = []
+    tehais = normalized.get("tehais")
+    fixed_hands: list[list[str]] = []
+    if isinstance(tehais, list):
+        source_hands = tehais[:4]
+    else:
+        source_hands = []
+    while len(source_hands) < 4:
+        source_hands.append([])
+
+    for actor, hand in enumerate(source_hands):
+        tiles = normalize_tile_list(hand)
+        if len(tiles) > 13:
+            synthetic_events.append({"type": "tsumo", "actor": actor, "pai": tiles[13]})
+        fixed_hands.append((tiles + ["?"] * 13)[:13])
+    normalized["tehais"] = fixed_hands
+
+    return normalized, synthetic_events
+
+
+def normalize_internal_match_events_for_mjai(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized_events: list[dict[str, Any]] = []
+    for index, event in enumerate(events):
+        if event.get("type") != "start_kyoku":
+            if event.get("type") in {"hora", "ryukyoku"} and event.get("deltas") is None:
+                normalized_events.append({**event, "deltas": [0, 0, 0, 0]})
+            else:
+                normalized_events.append(event)
+            continue
+
+        normalized, synthetic_events = normalize_start_kyoku_event_for_mjai(event)
+        normalized_events.append(normalized)
+
+        next_event = events[index + 1] if index + 1 < len(events) else None
+        for synthetic_event in synthetic_events:
+            if (
+                isinstance(next_event, dict)
+                and next_event.get("type") == "tsumo"
+                and next_event.get("actor") == synthetic_event["actor"]
+                and str(next_event.get("pai")) == synthetic_event["pai"]
+            ):
+                continue
+            normalized_events.append(synthetic_event)
+    return normalized_events
 
 
 def same_tile_family(left: str, right: str) -> bool:
@@ -955,12 +1024,19 @@ def run_mortal_review(events: list[dict[str, Any]], target_actor: int) -> tuple[
 
 
 def next_actual_action(events: list[dict[str, Any]], start_index: int, target_actor: int) -> dict[str, Any] | None:
+    decision_event = events[start_index]
+    decision_type = decision_event.get("type")
+    decision_actor = decision_event.get("actor")
+    is_reaction_window = decision_type in {"dahai", "kakan"} and decision_actor != target_actor
+
     for event in events[start_index + 1 :]:
         event_type = event.get("type")
         if event_type in BOUNDARY_TYPES:
             return None
         if event_type in ACTIONABLE_TYPES and event.get("actor") == target_actor:
             return event
+        if is_reaction_window and event_type in {"tsumo", "dahai", "reach", "dora"}:
+            return None
     return None
 
 
@@ -1089,6 +1165,8 @@ def build_review(
 
         expected_action = {key: value for key, value in output.items() if key != "meta"}
         actual_action = next_actual_action(events, index, target_actor)
+        if expected_action.get("type") == "none" and actual_action is None:
+            continue
         is_match = action_matches(expected_action, actual_action)
         decision_type = DECISION_TYPE_MAP.get(expected_action.get("type"), "other")
         q_values = meta.get("q_values", []) or []
@@ -1234,8 +1312,5 @@ def execute_review_job(db: Session, job: ReviewJob) -> ReviewRunResult:
     events = normalize_events_with_mjai_reviewer(raw_events)
     target_actor = determine_target_actor(job)
     job.target_actor = target_actor
-    try:
-        outputs, extra_data = run_mortal_review(events, target_actor)
-        return build_review(events, outputs, extra_data, target_actor)
-    except ReviewExecutionError as exc:
-        return run_fallback_review(events, target_actor, f"fallback after engine error: {exc}")
+    outputs, extra_data = run_mortal_review(events, target_actor)
+    return build_review(events, outputs, extra_data, target_actor)

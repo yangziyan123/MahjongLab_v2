@@ -30,14 +30,14 @@ export function PlayComingSoon() {
               <CardDescription>当前暂不提供在线对战，可先使用复盘分析功能。</CardDescription>
             </CardHeader>
             <CardContent className="flex gap-4">
-              <Link to="/review/import" className="flex-1">
-                <Button className="w-full">去体验复盘</Button>
-              </Link>
-              <Link to="/" className="flex-1">
-                <Button variant="outline" className="w-full">
+              <Button asChild className="flex-1">
+                <Link to="/review/import">去体验复盘</Link>
+              </Button>
+              <Button asChild variant="outline" className="flex-1">
+                <Link to="/">
                   返回首页
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             </CardContent>
           </Card>
         </div>

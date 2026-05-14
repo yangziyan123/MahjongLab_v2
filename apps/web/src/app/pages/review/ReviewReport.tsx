@@ -193,8 +193,26 @@ export function ReviewReport() {
         return true;
       });
   }, [allEntries]);
+  const timelineGroups = useMemo(() => {
+    const groups: Array<{ key: string; label: string; entries: ReviewEntry[] }> = [];
 
-  const detail = selectedEntry?.details?.[0];
+    for (const entry of filteredEntries) {
+      const key = `${entry.kyoku_index}-${entry.honba}`;
+      const current = groups[groups.length - 1];
+
+      if (current?.key === key) {
+        current.entries.push(entry);
+      } else {
+        groups.push({
+          key,
+          label: formatKyokuLabel(entry.kyoku_index, entry.honba),
+          entries: [entry],
+        });
+      }
+    }
+
+    return groups;
+  }, [filteredEntries]);
 
   if (reviewQuery.isLoading || allEntriesQuery.isLoading || filteredEntriesQuery.isLoading) {
     return (
@@ -220,7 +238,17 @@ export function ReviewReport() {
         </header>
         <main className="container mx-auto px-4 py-8">
           <Card>
-            <CardContent className="py-12 text-center text-red-600">无法读取这份复盘报告。</CardContent>
+            <CardContent className="py-12 text-center">
+              <div className="text-red-600">无法读取这份复盘报告。</div>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button variant="outline" onClick={() => window.location.reload()}>
+                  重试
+                </Button>
+                <Button asChild>
+                  <Link to="/review/history">返回历史</Link>
+                </Button>
+              </div>
+            </CardContent>
           </Card>
         </main>
       </div>
@@ -233,7 +261,7 @@ export function ReviewReport() {
         ? allEntriesQuery.error.message
         : filteredEntriesQuery.error instanceof Error
           ? filteredEntriesQuery.error.message
-          : "Failed to load review entries.";
+          : "无法读取复盘条目。";
 
     return (
       <div className="min-h-screen bg-slate-50">
@@ -242,15 +270,25 @@ export function ReviewReport() {
             <Link to="/review/history">
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="mr-2 h-4 w-4" />
-                杩斿洖鍘嗗彶
+                返回历史
               </Button>
             </Link>
-            <h1 className="ml-4 text-2xl font-bold text-slate-900">澶嶇洏鎶ュ憡</h1>
+            <h1 className="ml-4 text-2xl font-bold text-slate-900">复盘报告</h1>
           </div>
         </header>
         <main className="container mx-auto px-4 py-8">
           <Card>
-            <CardContent className="py-12 text-center text-red-600">{detail}</CardContent>
+            <CardContent className="py-12 text-center">
+              <div className="text-red-600">{detail}</div>
+              <div className="mt-4 flex justify-center gap-2">
+                <Button variant="outline" onClick={() => window.location.reload()}>
+                  重试
+                </Button>
+                <Button asChild>
+                  <Link to="/review/history">返回历史</Link>
+                </Button>
+              </div>
+            </CardContent>
           </Card>
         </main>
       </div>
@@ -310,50 +348,54 @@ export function ReviewReport() {
             <Card className="border-amber-200 bg-amber-50/80">
               <CardContent className="flex items-center gap-3 py-4 text-sm text-amber-900">
                 <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                Mistake library status is unavailable, but the review entries can still be viewed.
+                暂时无法读取错题库状态，但复盘条目仍可正常查看。
               </CardContent>
             </Card>
           )}
-          <Card className="overflow-hidden border-0 bg-slate-900 text-white shadow-xl shadow-slate-200">
-            <CardContent className="grid gap-6 px-8 py-8 lg:grid-cols-[1.2fr_0.8fr]">
-              <div className="space-y-3">
-                <div className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1 text-sm text-slate-200">
-                  {formatPlatform(review.platform)} · {review.engine_name} · {review.model_tag || "未知模型"}
+          <Card className="border-slate-200 bg-white shadow-sm">
+            <CardContent className="grid gap-6 p-6 lg:grid-cols-[1.15fr_0.85fr] lg:p-7">
+              <div className="space-y-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{formatPlatform(review.platform)}</Badge>
+                  <Badge variant="secondary">{review.engine_name}</Badge>
+                  <Badge variant="outline">{review.model_tag || "未知模型"}</Badge>
                 </div>
-                <h2 className="text-3xl font-bold">
-                  {review.target_player_label || `玩家 ${review.target_actor}`} 的复盘报告
-                </h2>
-                <p className="max-w-2xl text-slate-300">
-                  当前报告已接入真实后端，下面的逐手内容、动作对比和候选建议都来自结构化复盘结果。
-                </p>
-                <div className="grid gap-3 pt-2 sm:grid-cols-2">
-                  <div className="rounded-xl bg-white/5 p-4">
-                    <div className="text-sm text-slate-300">报告生成时间</div>
-                    <div className="mt-1 font-semibold text-white">{formatDateTime(review.created_at)}</div>
+                <div>
+                  <h2 className="text-2xl font-bold tracking-normal text-slate-950">
+                    {review.target_player_label || `玩家 ${review.target_actor}`} 的复盘报告
+                  </h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+                    逐手内容、动作对比和候选建议来自结构化复盘结果，重点用于定位偏差和沉淀下一轮训练。
+                  </p>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-sm text-slate-500">报告生成时间</div>
+                    <div className="mt-1 font-semibold text-slate-900">{formatDateTime(review.created_at)}</div>
                   </div>
-                  <div className="rounded-xl bg-white/5 p-4">
-                    <div className="text-sm text-slate-300">决策命中率</div>
-                    <div className="mt-1 font-semibold text-white">{review.rating ?? 0}</div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div className="text-sm text-slate-500">决策命中率</div>
+                    <div className="mt-1 font-semibold text-slate-900">{review.rating ?? 0}</div>
                   </div>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="rounded-2xl bg-white/10 p-4">
-                  <div className="text-sm text-slate-300">总决策数</div>
-                  <div className="mt-2 text-3xl font-bold text-white">{review.reviewed_decision_count}</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm text-slate-500">总决策数</div>
+                  <div className="mt-2 text-3xl font-bold text-slate-950">{review.reviewed_decision_count}</div>
                 </div>
-                <div className="rounded-2xl bg-emerald-400/15 p-4">
-                  <div className="text-sm text-emerald-100">最优命中</div>
-                  <div className="mt-2 text-3xl font-bold text-white">{review.optimal_count}</div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="text-sm text-emerald-700">最优命中</div>
+                  <div className="mt-2 text-3xl font-bold text-emerald-950">{review.optimal_count}</div>
                 </div>
-                <div className="rounded-2xl bg-amber-300/15 p-4">
-                  <div className="text-sm text-amber-100">中偏差</div>
-                  <div className="mt-2 text-3xl font-bold text-white">{review.medium_deviation_count}</div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-sm text-amber-700">中偏差</div>
+                  <div className="mt-2 text-3xl font-bold text-amber-950">{review.medium_deviation_count}</div>
                 </div>
-                <div className="rounded-2xl bg-rose-400/15 p-4">
-                  <div className="text-sm text-rose-100">高偏差</div>
-                  <div className="mt-2 text-3xl font-bold text-white">{review.high_deviation_count}</div>
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-4">
+                  <div className="text-sm text-rose-700">高偏差</div>
+                  <div className="mt-2 text-3xl font-bold text-rose-950">{review.high_deviation_count}</div>
                 </div>
               </div>
             </CardContent>
@@ -461,51 +503,64 @@ export function ReviewReport() {
             </CardContent>
           </Card>
 
-          <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-            <Card className="h-fit">
-              <CardHeader>
-                <CardTitle className="flex items-center">
-                  <Layers3 className="mr-2 h-5 w-5" />
-                  巡目时间轴
+          <div className="grid items-start gap-6 lg:grid-cols-[360px_1fr]">
+            <Card className="h-fit border-slate-200 bg-white shadow-sm lg:sticky lg:top-24">
+              <CardHeader className="pb-4">
+                <CardTitle className="flex items-center justify-between gap-3">
+                  <span className="flex items-center">
+                    <Layers3 className="mr-2 h-5 w-5" />
+                    巡目时间轴
+                  </span>
+                  <Badge variant="outline">{filteredEntries.length} 项</Badge>
                 </CardTitle>
                 <CardDescription>点击任一巡目，在右侧查看动作对比和候选动作。</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
+              <CardContent>
                 {filteredEntries.length === 0 && (
                   <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-500">当前筛选条件下没有复盘项。</div>
                 )}
-                {filteredEntries.map((entry) => {
-                  const active = entry.id === selectedEntry?.id;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onClick={() => setSelectedEntryId(entry.id)}
-                      className={`w-full rounded-xl border p-4 text-left transition-colors ${
-                        active ? "border-blue-500 bg-blue-50" : "border-slate-200 hover:bg-slate-50"
-                      }`}
-                    >
-                      <div className="mb-2 flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">{formatKyokuLabel(entry.kyoku_index, entry.honba)}</Badge>
-                        <Badge variant="outline">第 {entry.junme} 巡</Badge>
-                        {getDeviationBadge(entry)}
-                      </div>
-                      <div className="font-semibold text-slate-900">{formatDecisionType(entry.decision_type)}</div>
-                      <div className="mt-1 text-sm text-slate-600">
-                        实际：{formatAction(entry.actual_action)} | 推荐：{formatAction(entry.expected_action)}
-                      </div>
-                      {entry.tags.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {entry.tags.map((tag) => (
-                            <Badge key={tag} variant="secondary">
-                              {formatTrainingTag(tag)}
-                            </Badge>
-                          ))}
+                {filteredEntries.length > 0 && (
+                  <div className="max-h-[520px] space-y-4 overflow-y-auto pr-2 lg:max-h-[calc(100vh-280px)]">
+                    {timelineGroups.map((group) => (
+                      <div key={group.key} className="space-y-2">
+                        <div className="sticky top-0 z-[1] bg-white py-1 text-xs font-semibold text-slate-500">
+                          {group.label}
                         </div>
-                      )}
-                    </button>
-                  );
-                })}
+                        {group.entries.map((entry) => {
+                          const active = entry.id === selectedEntry?.id;
+                          return (
+                            <button
+                              key={entry.id}
+                              type="button"
+                              onClick={() => setSelectedEntryId(entry.id)}
+                              className={`w-full rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 ${
+                                active ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"
+                              }`}
+                            >
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <Badge variant="outline">第 {entry.junme} 巡</Badge>
+                                {getDeviationBadge(entry)}
+                              </div>
+                              <div className="font-semibold text-slate-900">{formatDecisionType(entry.decision_type)}</div>
+                              <div className="mt-1 text-sm text-slate-600">
+                                实际：{formatAction(entry.actual_action)} | 推荐：{formatAction(entry.expected_action)}
+                              </div>
+                              {entry.tags.length > 0 && (
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {entry.tags.map((tag) => (
+                                    <Badge key={tag} variant="secondary">
+                                      {formatTrainingTag(tag)}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -609,6 +664,11 @@ export function ReviewReport() {
                         <CardDescription>这里展示本次分析返回的候选动作明细。</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
+                        {(selectedEntry.details ?? []).length === 0 && (
+                          <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                            当前复盘项没有候选动作明细。
+                          </div>
+                        )}
                         {(selectedEntry.details ?? []).map((candidate, index) => (
                           <div key={index} className="rounded-xl border border-slate-200 p-4">
                             <div className="flex items-center justify-between gap-4">

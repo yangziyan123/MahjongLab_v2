@@ -80,7 +80,10 @@ export function ReviewTask() {
   if (jobQuery.isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="h-8 w-8 animate-spin text-slate-500" />
+        <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-4 text-slate-500 shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          <span>正在读取任务状态...</span>
+        </div>
       </div>
     );
   }
@@ -102,8 +105,16 @@ export function ReviewTask() {
         <main className="container mx-auto px-4 py-8">
           <div className="mx-auto max-w-2xl">
             <Card>
-              <CardContent className="py-12 text-center text-red-600">
-                无法读取任务状态，请检查 `taskId` 是否正确。
+              <CardContent className="py-12 text-center">
+                <div className="text-red-600">无法读取任务状态，请检查任务 ID 是否正确。</div>
+                <div className="mt-4 flex justify-center gap-2">
+                  <Button variant="outline" onClick={() => window.location.reload()}>
+                    重试
+                  </Button>
+                  <Button asChild>
+                    <Link to="/review/import">返回导入页</Link>
+                  </Button>
+                </div>
               </CardContent>
             </Card>
           </div>

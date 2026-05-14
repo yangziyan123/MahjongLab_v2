@@ -101,6 +101,7 @@ class GameEnvironment(object):
         self.clients = []
         self.observe_info = defaultdict(list)  # {who: [observer_client]}
         self.observers = {}  # {username: (observe_who, observer_client)}
+        self.record_observers = set()
 
         self.current_player = 0
         self.game_start = False
@@ -152,6 +153,7 @@ class GameEnvironment(object):
         self.clients.clear()
         self.observe_info.clear()
         self.observers.clear()
+        self.record_observers.clear()
 
         self.current_player = 0
         self.game_start = False
@@ -170,7 +172,7 @@ class GameEnvironment(object):
             who = self.clients.index(client)
             self.send_observers(who, {'event': 'update', 'key': key, 'value': value})
 
-    def player_join(self, client_socket, username, observe):
+    def player_join(self, client_socket, username, observe, record=False):
         if observe:
             if not self.allow_observe:
                 response = {'event': 'join', 'status': 0, 'message': '服务端未开启观战'}
@@ -183,6 +185,8 @@ class GameEnvironment(object):
                 idx = random.randint(0, 3)
                 self.observers[client.username] = (idx, client)
                 self.observe_info[idx].append(client)
+                if record:
+                    self.record_observers.add(client.username)
                 self.send_personal(client_socket, response)
                 if self.game_start:
                     self.send_all_game_info(client=client)
@@ -197,6 +201,8 @@ class GameEnvironment(object):
             logging.info(f"username: {username} join")
             self.observers[client.username] = (idx, client)
             self.observe_info[idx].append(client)
+            if record:
+                self.record_observers.add(client.username)
             self.send_personal(client_socket, response)
             if self.game_start:
                 self.send_all_game_info(client=client)
@@ -234,6 +240,8 @@ class GameEnvironment(object):
                 idx = random.randint(0, 3)
                 self.observers[client.username] = (idx, client)
                 self.observe_info[idx].append(client)
+                if record:
+                    self.record_observers.add(client.username)
                 self.send_personal(client_socket, response)
                 self.send_all_game_info(client=client)
                 return True, client
@@ -274,6 +282,7 @@ class GameEnvironment(object):
             client.close()
             who, client = self.observers.pop(client.username)
             self.observe_info[who].remove(client)
+            self.record_observers.discard(client.username)
 
     def send_personal(self, client: Union[socket.SocketType, Client], message):
         # logging.debug(yellow(f"Send {message}"))
@@ -283,19 +292,37 @@ class GameEnvironment(object):
     def send_observers(self, who, message):
         observers = self.observe_info[who]
         for observer in list(observers):
+            if observer.username in self.record_observers:
+                continue
             try:
                 self.send_personal(observer, message)
             except Exception:
                 continue
 
-    def send_multiply(self, message, exception=-1, exception_ob=-1):
+    def send_record_observers(self, message):
+        for username in list(self.record_observers):
+            observer = self.observers.get(username)
+            if observer is None:
+                self.record_observers.discard(username)
+                continue
+            _, client = observer
+            try:
+                self.send_personal(client, message)
+            except Exception:
+                continue
+
+    def send_multiply(self, message, exception=-1, exception_ob=-1, record=True):
         # logging.debug(yellow(f"Send multiply {message} except {exception}"))
+        if record:
+            self.send_record_observers(message)
         message = json.dumps(message).encode('utf-8') + b'\n'
         for i, client in enumerate(self.clients):
             if i == exception or not client.is_human():
                 continue
             client.send(message)
         for username, (who, client) in self.observers.items():
+            if username in self.record_observers:
+                continue
             if who == exception_ob:
                 continue
             try:
@@ -860,8 +887,9 @@ class GameEnvironment(object):
         message = {'event': 'draw', 'who': who, 'tile_id': tile_id, 'where': where}
         if connection.is_human():
             self.send_personal(connection, message)
+        self.send_record_observers(message)
         self.send_observers(who, message)
-        self.send_multiply({'event': 'draw', 'who': who, 'where': where}, exception=who, exception_ob=who)
+        self.send_multiply({'event': 'draw', 'who': who, 'where': where}, exception=who, exception_ob=who, record=False)
         self.update('left_num', self.game.left_num)
         action = await self.check_draw(who, tile_id, where)
         # if where == -1:
@@ -1323,7 +1351,8 @@ class Server:
                     message = json.loads(self.recv_socket(client_socket))
                     username = message.get('username')
                     observe = message.get('observe')
-                    success, client = self.game.player_join(client_socket, username, observe)
+                    record = message.get('record')
+                    success, client = self.game.player_join(client_socket, username, observe, record)
                     if success:
                         threading.Thread(target=self.handle_client, args=(client,), daemon=True).start()
             except Exception:

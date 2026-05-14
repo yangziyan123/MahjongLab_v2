@@ -187,6 +187,14 @@ export function PlayGame() {
                 <AlertTitle>无法加载对战页</AlertTitle>
                 <AlertDescription>{errorMessage}</AlertDescription>
               </Alert>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => window.location.reload()}>
+                  重试
+                </Button>
+                <Button asChild variant="outline" className="border-slate-700 bg-slate-900 text-white hover:bg-slate-800">
+                  <Link to="/play/config">返回入口</Link>
+                </Button>
+              </div>
             </div>
           ) : isLoading || !session ? (
             <div className="flex h-full min-h-[75vh] items-center justify-center text-slate-300">

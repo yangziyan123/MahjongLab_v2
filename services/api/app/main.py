@@ -312,8 +312,13 @@ def create_play_match_review(match_id: str, db: Session = Depends(get_db)) -> Re
     ).all()
     for existing_job in existing_jobs:
         source_payload = existing_job.source_payload or {}
-        if source_payload.get("event_limit") == event_limit:
-            return serialize_review_job(existing_job)
+        if source_payload.get("event_limit") != event_limit:
+            continue
+        if existing_job.review_id:
+            existing_review = db.get(Review, existing_job.review_id)
+            if existing_review is not None and existing_review.engine_name == "mjai-reviewer-lite":
+                continue
+        return serialize_review_job(existing_job)
 
     user = get_or_create_default_user(db)
     source = match.source_json or {}

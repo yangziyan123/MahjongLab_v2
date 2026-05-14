@@ -12,12 +12,14 @@ from app.database import Base
 import app.main as main_app
 from app.majsoul_url_import import MajsoulUrlImportError, parse_majsoul_url
 from app.models import Match, MatchEvent, ReviewJob, User
-from app.play_launcher import target_actor_from_agents
+from app.play_launcher import MahjongAiLauncher, MatchRecorder, target_actor_from_agents
 from app.review_engine import (
     ReviewExecutionError,
     determine_target_actor,
     is_tenhou_sanma_log,
     load_events_for_job,
+    normalize_internal_match_events_for_mjai,
+    next_actual_action,
     parse_tenhou_log_payload,
     run_fallback_review,
     validate_tenhou_log_payload,
@@ -148,6 +150,77 @@ class PlayRecorderTests(unittest.TestCase):
         self.assertIsNone(target_actor_from_agents([{"username": "一姬1(简单)"}], "User1"))
 
 
+    def test_start_kyoku_conversion_emits_mjai_compatible_shape(self) -> None:
+        class TestLauncher(MahjongAiLauncher):
+            def _update_match(self, match_id: str, status: str, result: dict | None = None) -> None:
+                return None
+
+            def _update_match_source(self, match_id: str, updates: dict) -> None:
+                return None
+
+        launcher = TestLauncher(SimpleNamespace())
+        recorder = MatchRecorder(
+            match_id="match-1",
+            username="User1",
+            host="127.0.0.1",
+            port=0,
+            stop_event=SimpleNamespace(),
+        )
+        launcher._recorder = recorder
+
+        events = launcher._convert_protocol_event(
+            recorder,
+            {
+                "event": "start",
+                "game": {
+                    "round": 0,
+                    "honba": 0,
+                    "riichi_ba": 0,
+                    "oya": 0,
+                    "dora_indicator": [104],
+                    "agents": [
+                        {"username": "AI1", "score": 250, "tile_count": 14, "is_ai": True},
+                        {"username": "AI2", "score": 250, "tile_count": 13, "is_ai": True},
+                        {"username": "AI3", "score": 250, "tile_count": 13, "is_ai": True},
+                        {"username": "User1", "score": 250, "tile_count": 14, "is_ai": False},
+                    ],
+                },
+                "self": {
+                    "seat": 3,
+                    "tiles": [31, 94, 33, 1, 4, 37, 108, 116, 78, 53, 21, 61, 73, 74],
+                },
+            },
+        )
+
+        start_kyoku = events[1]
+        self.assertEqual(start_kyoku["dora_marker"], "9s")
+        self.assertEqual(start_kyoku["scores"], [25000, 25000, 25000, 25000])
+        self.assertEqual([len(hand) for hand in start_kyoku["tehais"]], [13, 13, 13, 13])
+
+    def test_internal_match_normalization_adds_missing_terminal_deltas(self) -> None:
+        events = normalize_internal_match_events_for_mjai(
+            [
+                {"type": "start_kyoku", "dora_marker": "1m", "tehais": [["?"] * 13] * 4},
+                {"type": "hora", "actor": 0, "target": 1, "pai": "1m"},
+                {"type": "ryukyoku"},
+            ],
+        )
+
+        self.assertEqual(events[1]["deltas"], [0, 0, 0, 0])
+        self.assertEqual(events[2]["deltas"], [0, 0, 0, 0])
+
+    def test_reaction_window_does_not_match_future_discard(self) -> None:
+        events = [
+            {"type": "start_kyoku"},
+            {"type": "dahai", "actor": 1, "pai": "9m", "tsumogiri": False},
+            {"type": "tsumo", "actor": 2, "pai": "8s"},
+            {"type": "dahai", "actor": 2, "pai": "F", "tsumogiri": False},
+        ]
+
+        self.assertIsNone(next_actual_action(events, 1, 2))
+        self.assertEqual(next_actual_action(events, 2, 2), events[3])
+
+
 class PlayReviewEndpointTests(unittest.TestCase):
     def test_create_play_match_review_uses_recorded_target_actor_and_event_snapshot(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -253,6 +326,57 @@ class PlayReviewEndpointTests(unittest.TestCase):
                 events = load_events_for_job(db, job)
 
                 self.assertEqual([event["type"] for event in events], ["start_game", "start_kyoku"])
+            finally:
+                db.close()
+                engine.dispose()
+
+    def test_internal_match_loader_normalizes_recorded_start_kyoku(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+            Base.metadata.create_all(bind=engine)
+            TestingSession = sessionmaker(bind=engine)
+            db = TestingSession()
+            try:
+                user = User(display_name="Tester")
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+                match = Match(user_id=user.id, status="round_finished", source_json={})
+                db.add(match)
+                db.commit()
+                db.refresh(match)
+                db.add(
+                    MatchEvent(
+                        match_id=match.id,
+                        seq=0,
+                        event_type="start_kyoku",
+                        payload_json={
+                            "type": "start_kyoku",
+                            "bakaze": "E",
+                            "kyoku": 1,
+                            "honba": 0,
+                            "kyotaku": 0,
+                            "oya": 0,
+                            "dora_marker": ["9s"],
+                            "scores": [25000, 25000, 25000, 25000],
+                            "tehais": [["?"] * 14, ["?"] * 13, ["?"] * 13, ["1m"] * 14],
+                        },
+                    ),
+                )
+                db.commit()
+                job = SimpleNamespace(
+                    source_type="internal_match",
+                    source_payload={"match_id": match.id},
+                    match_id=match.id,
+                )
+
+                events = load_events_for_job(db, job)
+
+                self.assertEqual(events[0]["dora_marker"], "9s")
+                self.assertEqual([len(hand) for hand in events[0]["tehais"]], [13, 13, 13, 13])
+                self.assertEqual(events[1], {"type": "tsumo", "actor": 0, "pai": "?"})
+                self.assertEqual(events[2], {"type": "tsumo", "actor": 3, "pai": "1m"})
             finally:
                 db.close()
                 engine.dispose()

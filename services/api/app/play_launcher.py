@@ -73,6 +73,35 @@ def summarize_agents(agents: object) -> list[dict]:
     return summarized
 
 
+def normalize_start_hand(tiles: object) -> list[str]:
+    if not isinstance(tiles, list):
+        return ["?"] * 13
+    normalized = [str(tile) for tile in tiles if tile is not None]
+    if len(normalized) >= 13:
+        return normalized[:13]
+    return normalized + (["?"] * (13 - len(normalized)))
+
+
+def normalize_start_dora_marker(dora_indicators: object, tile_formatter) -> str:
+    if isinstance(dora_indicators, list) and dora_indicators:
+        return tile_formatter(dora_indicators[0])
+    return "?"
+
+
+def normalize_score_deltas(score_delta: object) -> list[int] | None:
+    if not isinstance(score_delta, list):
+        return None
+    deltas: list[int] = []
+    for value in score_delta[:4]:
+        try:
+            deltas.append(int(value) * 100)
+        except (TypeError, ValueError):
+            deltas.append(0)
+    if len(deltas) != 4:
+        return None
+    return deltas
+
+
 @dataclass(slots=True)
 class ManagedProcess:
     name: str
@@ -301,6 +330,27 @@ class MahjongAiLauncher:
         if self._recorder is not None:
             self._recorder.seq += 1
 
+    def _update_latest_terminal_event_deltas(self, match_id: str, deltas: list[int]) -> None:
+        with SessionLocal() as db:
+            events = db.scalars(
+                select(MatchEvent)
+                .where(MatchEvent.match_id == match_id)
+                .order_by(MatchEvent.seq.desc())
+                .limit(32),
+            ).all()
+            for event in events:
+                if event.event_type == "end_kyoku":
+                    return
+                if event.event_type not in {"hora", "ryukyoku"}:
+                    continue
+                payload = dict(event.payload_json or {})
+                if payload.get("deltas") is not None:
+                    return
+                payload["deltas"] = deltas
+                event.payload_json = payload
+                db.commit()
+                return
+
     def _update_match(self, match_id: str, status: str, result: dict | None = None) -> None:
         with SessionLocal() as db:
             match = db.get(Match, match_id)
@@ -324,6 +374,9 @@ class MahjongAiLauncher:
     def _convert_protocol_event(self, recorder: MatchRecorder, message: dict) -> list[dict]:
         event_name = message.get("event")
         converted: list[dict] = []
+
+        if event_name != "start" and not recorder.started:
+            return converted
 
         if event_name == "start":
             game = message.get("game", {})
@@ -355,11 +408,16 @@ class MahjongAiLauncher:
                     tile_count = int(agent.get("tile_count") or 13)
                 except (TypeError, ValueError):
                     tile_count = 13
-                tehais.append(["?"] * max(tile_count, 0))
+                tehais.append(normalize_start_hand(["?"] * max(tile_count, 0)))
             while len(tehais) < 4:
-                tehais.append([])
+                tehais.append(["?"] * 13)
             if isinstance(observed_actor, int) and 0 <= observed_actor <= 3 and isinstance(self_info, dict):
-                tehais[observed_actor] = [self._tile_to_mjai(tile_id) for tile_id in self_info.get("tiles", [])]
+                tehais[observed_actor] = normalize_start_hand(
+                    [self._tile_to_mjai(tile_id) for tile_id in self_info.get("tiles", [])],
+                )
+            scores = [int(agent.get("score", 250) * 100) for agent in agents[:4] if isinstance(agent, dict)]
+            while len(scores) < 4:
+                scores.append(25000)
             if self._recorder is not None and not self._recorder.started:
                 converted.append({"type": "start_game"})
                 self._recorder.started = True
@@ -372,8 +430,8 @@ class MahjongAiLauncher:
                     "honba": honba,
                     "kyotaku": int(game.get("riichi_ba", 0)),
                     "oya": int(game.get("oya", round_index % 4)),
-                    "dora_marker": [self._tile_to_mjai(x) for x in game.get("dora_indicator", [])],
-                    "scores": [int(agent.get("score", 250) * 100) for agent in game.get("agents", [])],
+                    "dora_marker": normalize_start_dora_marker(game.get("dora_indicator", []), self._tile_to_mjai),
+                    "scores": scores,
                     "tehais": tehais,
                 },
             )
@@ -476,6 +534,9 @@ class MahjongAiLauncher:
             return converted
 
         if event_name == "settlement":
+            deltas = normalize_score_deltas(message.get("score"))
+            if deltas is not None:
+                self._update_latest_terminal_event_deltas(recorder.match_id, deltas)
             converted.append({"type": "end_kyoku"})
             self._update_match(
                 recorder.match_id,
@@ -513,7 +574,7 @@ class MahjongAiLauncher:
 
             with sock:
                 stream = sock.makefile("rwb")
-                join_message = {"username": f"recorder-{recorder.match_id[:8]}", "observe": True}
+                join_message = {"username": f"recorder-{recorder.match_id[:8]}", "observe": True, "record": True}
                 stream.write((json.dumps(join_message) + "\n").encode("utf-8"))
                 stream.flush()
                 self._update_match(recorder.match_id, "running")

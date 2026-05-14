@@ -78,10 +78,6 @@ export function ReviewImport() {
     () => new Set((sourcesQuery.data ?? []).filter((item) => item.enabled).map((item) => item.key)),
     [sourcesQuery.data],
   );
-  const enabledSourceLabels = useMemo(
-    () => (sourcesQuery.data ?? []).filter((item) => item.enabled).map((item) => item.label),
-    [sourcesQuery.data],
-  );
 
   useEffect(() => {
     if (tenhouImportType === "link" && !enabledSources.has("tenhou_url") && enabledSources.has("tenhou_id")) {
@@ -249,7 +245,10 @@ export function ReviewImport() {
               返回首页
             </Button>
           </Link>
-          <h1 className="ml-4 text-2xl font-bold text-slate-900">AI 复盘</h1>
+          <div className="ml-4">
+            <h1 className="text-2xl font-bold text-slate-900">AI 复盘</h1>
+            <p className="text-sm text-slate-500">导入牌谱，生成可筛选、可回放、可加入错题库的复盘结果。</p>
+          </div>
         </div>
       </header>
 
@@ -522,11 +521,6 @@ export function ReviewImport() {
                   </div>
                 )}
 
-                {/* <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                  已接入后端来源：
-                  <span className="ml-2 font-semibold text-slate-900">{enabledSourceLabels.join(" / ") || "加载中"}</span>
-                </div> */}
-
                 <div className="flex gap-4">
                   <Button type="submit" className="flex-1" size="lg" disabled={createMutation.isPending}>
                     {createMutation.isPending ? "正在创建任务..." : "创建复盘任务"}
@@ -544,7 +538,7 @@ export function ReviewImport() {
           <Card>
             <CardHeader>
               <CardTitle>最近生成的报告</CardTitle>
-              {/* <CardDescription>这些记录来自真实后端，可直接跳转查看。</CardDescription> */}
+              <CardDescription>这些记录来自真实后端，可直接跳转查看。</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {recentReviews.length === 0 && (
