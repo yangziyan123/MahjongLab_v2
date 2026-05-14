@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Download, Expand, FileSearch, LoaderCircle, Shrink } from "lucide-react";
 
-import { ApiError, createReviewJob, getPlayMatch, getPlayMatchExportUrl, getPlaySession } from "../../lib/api";
+import { ApiError, getPlayMatch, getPlayMatchExportUrl, getPlaySession, startPlayMatchReview } from "../../lib/api";
 import type { PlayMatch, PlaySession } from "../../lib/types";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
@@ -26,14 +26,13 @@ export function PlayGame() {
       if (!session?.match_id) {
         throw new Error("match_id missing");
       }
-      return createReviewJob({
-        source_type: "internal_match",
-        platform: "internal",
-        source: { match_id: session.match_id },
-        target_player_ref: "0",
-      });
+      return startPlayMatchReview(session.match_id);
     },
     onSuccess: (job) => {
+      if (job.review_id) {
+        navigate(`/review/report/${job.review_id}`);
+        return;
+      }
       navigate(`/review/task/${job.id}`);
     },
   });
@@ -93,7 +92,10 @@ export function PlayGame() {
           return;
         }
         setMatch(latestMatch);
-        setCanReviewNow(latestMatch.status === "round_finished" || latestMatch.status === "completed");
+        setCanReviewNow(
+          latestMatch.reviewable_event_count > 0 &&
+            (latestMatch.status === "round_finished" || latestMatch.status === "completed"),
+        );
         if (latestMatch.status === "completed") {
           window.clearInterval(timer);
           navigate(`/play/result/${latestMatch.id}`);

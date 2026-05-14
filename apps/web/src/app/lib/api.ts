@@ -91,6 +91,12 @@ export function getPlayMatch(matchId: string) {
   return apiRequest<PlayMatch>(`/api/play/matches/${matchId}`);
 }
 
+export function startPlayMatchReview(matchId: string) {
+  return apiRequest<ReviewJob>(`/api/play/matches/${matchId}/review`, {
+    method: "POST",
+  });
+}
+
 export function getPlayMatchExportUrl(matchId: string) {
   return `/api/play/matches/${matchId}/export`;
 }

@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { ArrowLeft, Bot, ExternalLink, LoaderCircle, PlayCircle, Server } from "lucide-react";
+import { ArrowLeft, LoaderCircle, PlayCircle } from "lucide-react";
 
 import { ApiError, createPlaySession } from "../../lib/api";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -83,47 +83,32 @@ export function PlayConfig() {
           <Card>
             <CardHeader>
               <CardTitle>启动本地对战</CardTitle>
-              <CardDescription>
-                MahjongLab 会通过后端启动 Mahjong-AI 对战服务，并把网页客户端嵌入当前平台。
-              </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="grid gap-6 md:grid-cols-2">
-                <div className="space-y-3">
-                  <Label htmlFor="username">用户名</Label>
-                  <Input
-                    id="username"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                    placeholder="例如 User1"
-                    maxLength={32}
-                  />
-                  <p className="text-sm text-slate-500">
-                    进入对局时会自动传入这个用户名。
-                  </p>
+              <div className="space-y-3">
+                <Label htmlFor="username">用户名</Label>
+                <Input
+                  id="username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="例如 User1"
+                  maxLength={8}
+                />
+                <p className="text-sm text-slate-500">
+                  Mahjong-AI 限制用户名最多 8 个字符，复盘会自动识别这个玩家的座位。
+                </p>
 
-                  <div className="space-y-2 pt-2">
-                    <Label>AI 难度</Label>
-                    <Select value={aiLevel} onValueChange={(value) => setAiLevel(value as "normal" | "hard")}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="选择难度" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="normal">普通</SelectItem>
-                        <SelectItem value="hard">进阶</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                  <div className="mb-2 flex items-center gap-2 font-semibold text-slate-900">
-                    <Server className="h-4 w-4" />
-                    启动内容
-                  </div>
-                  <div>Mahjong-AI socket 服务</div>
-                  <div>WebSocket 桥接服务</div>
-                  <div>网页客户端静态服务</div>
+                <div className="space-y-2 pt-2">
+                  <Label>AI 难度</Label>
+                  <Select value={aiLevel} onValueChange={(value) => setAiLevel(value as "normal" | "hard")}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="选择难度" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">普通</SelectItem>
+                      <SelectItem value="hard">进阶</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
 
@@ -133,31 +118,6 @@ export function PlayConfig() {
                   <AlertDescription>{errorMessage}</AlertDescription>
                 </Alert>
               ) : null}
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5">
-                  <div className="flex items-start gap-3">
-                    <Bot className="mt-0.5 h-5 w-5 text-blue-600" />
-                    <div>
-                      <div className="font-semibold text-slate-900">固定对战形态</div>
-                      <div className="mt-1 text-sm text-slate-600">
-                        当前接入 3 AI + 1 人类玩家的本地日麻对战。
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-lg border border-dashed border-slate-300 bg-white p-5">
-                  <div className="flex items-start gap-3">
-                    <ExternalLink className="mt-0.5 h-5 w-5 text-emerald-600" />
-                    <div>
-                      <div className="font-semibold text-slate-900">进入方式</div>
-                      <div className="mt-1 text-sm text-slate-600">
-                        启动完成后会在 MahjongLab 对战页中嵌入游戏画面。
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
 
               <div className="flex gap-4 border-t pt-6">
                 <Button onClick={handleStartGame} className="flex-1" size="lg" disabled={isStarting}>

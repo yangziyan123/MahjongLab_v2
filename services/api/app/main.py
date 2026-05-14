@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, joinedload
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .jobs import enqueue_review_job
-from .models import MistakeItem, Review, ReviewEntry, ReviewJob, User
+from .models import Match, MatchEvent, MistakeItem, Review, ReviewEntry, ReviewJob, User
 from .play_launcher import MahjongAiLauncher
 from .schemas import (
     CreatePlaySessionRequest,
@@ -76,6 +76,58 @@ def serialize_review_job(job: ReviewJob) -> ReviewJobOut:
         started_at=job.started_at,
         completed_at=job.completed_at,
     )
+
+
+def create_review_job_record(
+    db: Session,
+    *,
+    user: User,
+    source_type: str,
+    platform: str | None,
+    source: dict,
+    options: dict,
+    target_player_ref: str | None,
+    match_id: str | None = None,
+    raw_input_object_key: str | None = None,
+) -> ReviewJob:
+    job = ReviewJob(
+        user_id=user.id,
+        match_id=match_id,
+        status="queued",
+        progress=5,
+        step="queued",
+        source_type=source_type,
+        platform=platform,
+        source_payload=source,
+        options_json=options,
+        target_player_ref=target_player_ref,
+        raw_input_object_key=raw_input_object_key,
+        attempt_count=1,
+        queued_at=utcnow(),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    enqueue_review_job(job.id)
+    return job
+
+
+def get_internal_match_review_event_limit(db: Session, match: Match) -> int:
+    total_event_count = db.scalar(select(func.count(MatchEvent.id)).where(MatchEvent.match_id == match.id)) or 0
+    if total_event_count <= 0:
+        return 0
+    if match.status == "completed":
+        return int(total_event_count)
+
+    last_completed_kyoku_seq = db.scalar(
+        select(func.max(MatchEvent.seq)).where(
+            MatchEvent.match_id == match.id,
+            MatchEvent.event_type == "end_kyoku",
+        ),
+    )
+    if last_completed_kyoku_seq is None:
+        return 0
+    return int(last_completed_kyoku_seq) + 1
 
 
 def serialize_review(review: Review) -> ReviewOut:
@@ -234,6 +286,43 @@ def get_play_match(match_id: str) -> PlayMatchOut:
     return match
 
 
+@app.post("/api/play/matches/{match_id}/review", response_model=ReviewJobOut, response_model_by_alias=False)
+def create_play_match_review(match_id: str, db: Session = Depends(get_db)) -> ReviewJobOut:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="match not found")
+
+    event_limit = get_internal_match_review_event_limit(db, match)
+    if event_limit <= 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="还没有已结算的小局可复盘")
+
+    existing_jobs = db.scalars(
+        select(ReviewJob)
+        .where(ReviewJob.match_id == match_id, ReviewJob.source_type == "internal_match", ReviewJob.status != "failed")
+        .order_by(ReviewJob.created_at.desc())
+    ).all()
+    for existing_job in existing_jobs:
+        source_payload = existing_job.source_payload or {}
+        if source_payload.get("event_limit") == event_limit:
+            return serialize_review_job(existing_job)
+
+    user = get_or_create_default_user(db)
+    source = match.source_json or {}
+    target_actor = source.get("target_actor")
+    target_player_ref = str(target_actor) if isinstance(target_actor, int) else "0"
+    job = create_review_job_record(
+        db,
+        user=user,
+        source_type="internal_match",
+        platform="internal",
+        source={"match_id": match_id, "event_limit": event_limit},
+        options={"origin": "play_result", "snapshot_status": match.status},
+        target_player_ref=target_player_ref,
+        match_id=match_id,
+    )
+    return serialize_review_job(job)
+
+
 @app.get("/api/play/matches/{match_id}/export")
 def export_play_match(match_id: str) -> PlainTextResponse:
     try:
@@ -302,26 +391,29 @@ def create_review_job(payload: CreateReviewJobRequest, db: Session = Depends(get
     source = payload.source or {}
     match_id = source.get("match_id") if payload.source_type == "internal_match" else None
     raw_input_object_key = source.get("file_key") if payload.source_type in {"upload_file", "majsoul_file"} else None
+    target_player_ref = payload.target_player_ref
 
-    job = ReviewJob(
-        user_id=user.id,
-        match_id=match_id,
-        status="queued",
-        progress=5,
-        step="queued",
+    if payload.source_type == "internal_match":
+        if not isinstance(match_id, str) or not match_id:
+            raise HTTPException(status_code=400, detail="internal_match requires source.match_id")
+        match = db.get(Match, match_id)
+        if match is None:
+            raise HTTPException(status_code=404, detail="match not found")
+        target_actor = (match.source_json or {}).get("target_actor")
+        if target_player_ref is None and isinstance(target_actor, int):
+            target_player_ref = str(target_actor)
+
+    job = create_review_job_record(
+        db,
+        user=user,
         source_type=payload.source_type,
         platform=payload.platform,
-        source_payload=source,
-        options_json=payload.options,
-        target_player_ref=payload.target_player_ref,
+        source=source,
+        options=payload.options,
+        target_player_ref=target_player_ref,
+        match_id=match_id if isinstance(match_id, str) else None,
         raw_input_object_key=raw_input_object_key,
-        attempt_count=1,
-        queued_at=utcnow(),
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    enqueue_review_job(job.id)
     return serialize_review_job(job)
 
 

@@ -427,6 +427,11 @@ def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
         if not isinstance(match_id, str) or not match_id:
             raise ReviewExecutionError("internal_match source requires match_id")
         stmt = select(MatchEvent).where(MatchEvent.match_id == match_id).order_by(MatchEvent.seq.asc())
+        event_limit = source.get("event_limit")
+        if isinstance(event_limit, int):
+            if event_limit <= 0:
+                raise ReviewExecutionError("internal_match event_limit must be positive")
+            stmt = stmt.limit(event_limit)
         events = [row.payload_json for row in db.scalars(stmt).all()]
         if not events:
             raise ReviewExecutionError(f"no match events found for match_id={match_id}")

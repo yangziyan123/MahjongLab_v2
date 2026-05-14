@@ -1,45 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookOpen, FileSearch, History, PlayCircle, Target } from "lucide-react";
+import { FileSearch, History, PlayCircle, Target } from "lucide-react";
 import { Link } from "react-router";
 
-import { getDashboardSummary, getMe, listReviews } from "../lib/api";
+import { listReviews } from "../lib/api";
 import { formatDateTime } from "../lib/format";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 
 export function Home() {
-  const meQuery = useQuery({
-    queryKey: ["me"],
-    queryFn: getMe,
-  });
-  const summaryQuery = useQuery({
-    queryKey: ["dashboard-summary"],
-    queryFn: getDashboardSummary,
-  });
   const recentReviewsQuery = useQuery({
     queryKey: ["home-reviews"],
     queryFn: () => listReviews({ page: 1, page_size: 3 }),
   });
 
-  const reviewCount = summaryQuery.data?.review_count ?? 0;
-  const completedJobCount = summaryQuery.data?.completed_job_count ?? 0;
-  const failedJobCount = summaryQuery.data?.failed_job_count ?? 0;
-  const mistakeCount = summaryQuery.data?.mistake_count ?? 0;
   const recentReviews = recentReviewsQuery.data?.items ?? [];
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f8fafc_0%,_#eff6ff_40%,_#eef2ff_100%)]">
       <header className="border-b border-slate-200/70 bg-white/85 shadow-sm backdrop-blur">
         <div className="container mx-auto px-4 py-6">
-          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900">MahjongLab</h1>
-            </div>
-            <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              当前用户:
-              <span className="ml-2 font-semibold text-slate-900">{meQuery.data?.display_name ?? "加载中"}</span>
-            </div>
-          </div>
+          <h1 className="text-3xl font-bold text-slate-900">MahjongLab</h1>
         </div>
       </header>
 
@@ -78,17 +58,14 @@ export function Home() {
                   <PlayCircle className="h-6 w-6 text-blue-600" />
                 </div>
                 <CardTitle>AI 对战训练</CardTitle>
-                <CardDescription>查看对战入口与相关信息。</CardDescription>
+                <CardDescription>仅支持4人麻将。</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <Link to="/play/config">
                   <Button className="w-full" size="lg">
-                    进入对战入口
+                    进入对战
                   </Button>
                 </Link>
-                <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                  当前暂不提供在线对战，请先使用复盘分析功能。
-                </div>
               </CardContent>
             </Card>
 
@@ -122,34 +99,7 @@ export function Home() {
             </Card>
           </div>
 
-          <div className="grid gap-8 lg:grid-cols-[1fr_0.95fr]">
-            <div className="rounded-xl bg-white p-8 shadow-sm">
-              <h3 className="mb-6 flex items-center text-2xl font-bold text-slate-900">
-                <BookOpen className="mr-2 h-6 w-6" />
-                平台特性
-              </h3>
-              <div className="grid gap-6 md:grid-cols-3">
-                <div>
-                  <h4 className="mb-2 font-semibold text-slate-900">真实 API 驱动</h4>
-                  <p className="text-sm text-slate-600">
-                    复盘任务、报告摘要、逐手分析都通过统一后端接口提供。
-                  </p>
-                </div>
-                <div>
-                  <h4 className="mb-2 font-semibold text-slate-900">原型页面复用</h4>
-                  <p className="text-sm text-slate-600">
-                    保留原型的页面骨架和视觉语言，只替换业务状态和接口调用。
-                  </p>
-                </div>
-                <div>
-                  <h4 className="mb-2 font-semibold text-slate-900">逐手复盘准备就绪</h4>
-                  <p className="text-sm text-slate-600">
-                    支持按局、按动作类型、按偏差等级查看结构化分析结果，并可直接加入错题库。
-                  </p>
-                </div>
-              </div>
-            </div>
-
+          <div>
             <Card className="bg-white/90 shadow-sm">
               <CardHeader>
                 <CardTitle className="flex items-center">

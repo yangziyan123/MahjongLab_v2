@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { PlayCircle, FileSearch, History, BookOpen } from "lucide-react";
+import { PlayCircle, FileSearch, History } from "lucide-react";
 
 export function Home() {
   return (
@@ -80,34 +80,6 @@ export function Home() {
                 </Link>
               </CardContent>
             </Card>
-          </div>
-
-          {/* Features */}
-          <div className="bg-white rounded-xl p-8 shadow-sm">
-            <h3 className="text-2xl font-bold text-slate-900 mb-6 flex items-center">
-              <BookOpen className="w-6 h-6 mr-2" />
-              平台特性
-            </h3>
-            <div className="grid md:grid-cols-3 gap-6">
-              <div>
-                <h4 className="font-semibold text-slate-900 mb-2">AI 驱动复盘</h4>
-                <p className="text-slate-600 text-sm">
-                  逐手分析决策，定位重点失误，提供候选动作对比
-                </p>
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-900 mb-2">人机实战训练</h4>
-                <p className="text-slate-600 text-sm">
-                  可配置难度的 AI 对手，完整对局体验
-                </p>
-              </div>
-              <div>
-                <h4 className="font-semibold text-slate-900 mb-2">学习闭环</h4>
-                <p className="text-slate-600 text-sm">
-                  对局后直接转入复盘，形成训练-分析-改进的完整循环
-                </p>
-              </div>
-            </div>
           </div>
         </div>
       </main>

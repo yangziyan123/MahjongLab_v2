@@ -58,4 +58,4 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 - 已支持 `Tenhou URL / Tenhou ID / 雀魂导出文件 / 雀魂 URL / mjai 文件 / JSON` 导入
 - 已支持从复盘报告加入错题库，并在错题库页回跳原报告
 - `Majsoul URL` 需要本机浏览器存在已登录雀魂的会话，并且仍需手动指定目标玩家座位
-- AI 对战页会通过后端启动根目录下的 `Mahjong-AI`
+- AI 对战页会通过后端启动根目录下的 `Mahjong-AI`，任意小局结算后可直接创建当前进度的复盘任务

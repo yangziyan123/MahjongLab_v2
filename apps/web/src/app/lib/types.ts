@@ -47,6 +47,20 @@ export interface PlayMatch {
   status: string;
   source: Record<string, unknown>;
   result?: Record<string, unknown> | null;
+  event_count: number;
+  reviewable_event_count: number;
+  completed_kyoku_count: number;
+  target_actor?: number | null;
+  target_player_label?: string | null;
+  latest_review_job?: {
+    id: string;
+    status: ReviewJobStatus;
+    event_count?: number | null;
+    review_id?: string | null;
+    error_message?: string | null;
+    created_at: string;
+    updated_at: string;
+  } | null;
   created_at: string;
   updated_at: string;
 }

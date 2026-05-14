@@ -12,12 +12,12 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .config import Settings
 from .database import SessionLocal
-from .models import Match, MatchEvent, User
-from .schemas import PlayMatchOut, PlayServiceStatus, PlaySessionOut
+from .models import Match, MatchEvent, ReviewJob, User
+from .schemas import PlayMatchOut, PlayMatchReviewJobOut, PlayServiceStatus, PlaySessionOut
 
 
 def _can_connect(host: str, port: int, timeout: float = 0.5) -> bool:
@@ -40,6 +40,37 @@ def _resolve_command(command: str) -> str | None:
     if candidate.is_absolute() or candidate.parent != Path("."):
         return str(candidate) if candidate.exists() else None
     return shutil.which(command)
+
+
+def target_actor_from_agents(agents: object, username: str) -> int | None:
+    if not isinstance(agents, list):
+        return None
+    normalized_username = username.strip()
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, dict):
+            continue
+        agent_username = agent.get("username")
+        if isinstance(agent_username, str) and agent_username.strip() == normalized_username:
+            return index
+    return None
+
+
+def summarize_agents(agents: object) -> list[dict]:
+    if not isinstance(agents, list):
+        return []
+    summarized = []
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, dict):
+            continue
+        summarized.append(
+            {
+                "actor": index,
+                "username": agent.get("username"),
+                "is_ai": bool(agent.get("is_ai")),
+                "score": agent.get("score"),
+            },
+        )
+    return summarized
 
 
 @dataclass(slots=True)
@@ -159,6 +190,7 @@ class MahjongAiLauncher:
             str(server_port),
             "--allow_observe",
             "-d",
+            "-f",
         ]
         if ai_level == "normal":
             server_command.append("--disable_ai_models")
@@ -178,7 +210,7 @@ class MahjongAiLauncher:
                 port=websocket_port,
                 command=[
                     str(self.settings.mahjong_ai_websockify),
-                    str(websocket_port),
+                    f"{host}:{websocket_port}",
                     f"{host}:{server_port}",
                 ],
                 cwd=self.settings.mahjong_ai_root,
@@ -279,17 +311,36 @@ class MahjongAiLauncher:
                 match.result_json = result
             db.commit()
 
+    def _update_match_source(self, match_id: str, updates: dict) -> None:
+        if not updates:
+            return
+        with SessionLocal() as db:
+            match = db.get(Match, match_id)
+            if match is None:
+                return
+            match.source_json = {**(match.source_json or {}), **updates}
+            db.commit()
+
     def _convert_protocol_event(self, recorder: MatchRecorder, message: dict) -> list[dict]:
         event_name = message.get("event")
         converted: list[dict] = []
 
         if event_name == "start":
+            game = message.get("game", {})
+            agents = game.get("agents", [])
+            target_actor = target_actor_from_agents(agents, recorder.username)
+            source_updates = {
+                "target_player_label": recorder.username,
+                "agents": summarize_agents(agents),
+            }
+            if target_actor is not None:
+                source_updates["target_actor"] = target_actor
+            self._update_match_source(recorder.match_id, source_updates)
             self._update_match(
                 recorder.match_id,
                 "running",
-                {"last_event": "start", "round": int(message.get("game", {}).get("round", 0)) + 1},
+                {"last_event": "start", "round": int(game.get("round", 0)) + 1},
             )
-            game = message.get("game", {})
             round_index = int(game.get("round", 0))
             honba = int(game.get("honba", 0))
             bakaze = "E" if round_index < 4 else "S"
@@ -305,7 +356,7 @@ class MahjongAiLauncher:
                     "kyoku": kyoku,
                     "honba": honba,
                     "kyotaku": int(game.get("riichi_ba", 0)),
-                    "oya": int(round_index % 4),
+                    "oya": int(game.get("oya", round_index % 4)),
                     "dora_marker": [self._tile_to_mjai(x) for x in game.get("dora_indicator", [])],
                     "scores": [int(agent.get("score", 250) * 100) for agent in game.get("agents", [])],
                 },
@@ -594,11 +645,62 @@ class MahjongAiLauncher:
             match = db.get(Match, match_id)
             if match is None:
                 return None
+            event_count = db.scalar(select(func.count(MatchEvent.id)).where(MatchEvent.match_id == match_id)) or 0
+            completed_kyoku_count = (
+                db.scalar(
+                    select(func.count(MatchEvent.id)).where(
+                        MatchEvent.match_id == match_id,
+                        MatchEvent.event_type == "end_kyoku",
+                    ),
+                )
+                or 0
+            )
+            last_completed_kyoku_seq = db.scalar(
+                select(func.max(MatchEvent.seq)).where(
+                    MatchEvent.match_id == match_id,
+                    MatchEvent.event_type == "end_kyoku",
+                ),
+            )
+            reviewable_event_count = int(event_count)
+            if match.status != "completed":
+                reviewable_event_count = int(last_completed_kyoku_seq) + 1 if last_completed_kyoku_seq is not None else 0
+            latest_review_job = db.scalar(
+                select(ReviewJob)
+                .where(ReviewJob.match_id == match_id, ReviewJob.source_type == "internal_match")
+                .order_by(ReviewJob.created_at.desc())
+                .limit(1),
+            )
+            source = match.source_json or {}
+            target_actor = source.get("target_actor")
+            if not isinstance(target_actor, int):
+                target_actor = None
+            target_player_label = source.get("target_player_label") or source.get("username")
+            latest_review_event_count = None
+            if latest_review_job is not None and isinstance(latest_review_job.source_payload, dict):
+                source_event_limit = latest_review_job.source_payload.get("event_limit")
+                if isinstance(source_event_limit, int):
+                    latest_review_event_count = source_event_limit
             return PlayMatchOut(
                 id=match.id,
                 status=match.status,
-                source=match.source_json or {},
+                source=source,
                 result=match.result_json,
+                event_count=int(event_count),
+                reviewable_event_count=reviewable_event_count,
+                completed_kyoku_count=int(completed_kyoku_count),
+                target_actor=target_actor,
+                target_player_label=target_player_label if isinstance(target_player_label, str) else None,
+                latest_review_job=PlayMatchReviewJobOut(
+                    id=latest_review_job.id,
+                    status=latest_review_job.status,
+                    event_count=latest_review_event_count,
+                    review_id=latest_review_job.review_id,
+                    error_message=latest_review_job.error_message,
+                    created_at=latest_review_job.created_at,
+                    updated_at=latest_review_job.updated_at,
+                )
+                if latest_review_job is not None
+                else None,
                 created_at=match.created_at,
                 updated_at=match.updated_at,
             )

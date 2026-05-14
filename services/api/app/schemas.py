@@ -33,7 +33,7 @@ class UserProfile(BaseModel):
 
 
 class CreatePlaySessionRequest(BaseModel):
-    username: str = Field(min_length=1, max_length=32)
+    username: str = Field(min_length=1, max_length=8)
     ai_level: str = Field(default="normal", pattern="^(normal|hard)$")
 
 
@@ -60,11 +60,27 @@ class PlaySessionOut(BaseModel):
     services: list[PlayServiceStatus]
 
 
+class PlayMatchReviewJobOut(BaseModel):
+    id: str
+    status: str
+    event_count: int | None = None
+    review_id: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PlayMatchOut(BaseModel):
     id: str
     status: str
     source: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] | None = None
+    event_count: int = 0
+    reviewable_event_count: int = 0
+    completed_kyoku_count: int = 0
+    target_actor: int | None = None
+    target_player_label: str | None = None
+    latest_review_job: PlayMatchReviewJobOut | None = None
     created_at: datetime
     updated_at: datetime
 

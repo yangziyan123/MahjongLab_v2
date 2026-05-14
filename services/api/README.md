@@ -21,6 +21,7 @@
   - `/api/me`
   - `/api/play/session`
   - `/api/play/matches/{match_id}`
+  - `POST /api/play/matches/{match_id}/review`
   - `/api/play/matches/{match_id}/export`
   - `/api/dashboard/summary`
   - `/api/platforms/replay-sources`
@@ -54,6 +55,8 @@
 - `MAHJONG_AI_ROOT`
 - `MAHJONG_AI_PYTHON`
 - `MAHJONG_AI_WEBSOCKIFY`
+
+AI 对战任意小局结算后，对战页和结果页都可以调用 `POST /api/play/matches/{match_id}/review` 创建平台内对局复盘任务。复盘目标座位来自对局开始事件里记录到的真实玩家座位，不再固定使用 0 号位；任务会固定到最近一个 `end_kyoku` 之前的事件数，后续小局继续记录不会污染这次复盘。
 
 ```powershell
 cd services/api
