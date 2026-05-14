@@ -30,7 +30,7 @@ export function PlayGame() {
     },
     onSuccess: (job) => {
       if (job.review_id) {
-        navigate(`/review/report/${job.review_id}`);
+        navigate(`/review/open/${job.review_id}`);
         return;
       }
       navigate(`/review/task/${job.id}`);

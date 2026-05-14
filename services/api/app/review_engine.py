@@ -466,6 +466,256 @@ def determine_target_actor(job: ReviewJob) -> int:
         return 0
 
 
+def normalize_actor(value: Any) -> int | None:
+    try:
+        actor = int(value)
+    except (TypeError, ValueError):
+        return None
+    return actor if actor in {0, 1, 2, 3} else None
+
+
+def normalize_tile_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(tile) for tile in value if tile is not None]
+
+
+def normalize_four_tile_lists(value: Any) -> list[list[str]]:
+    hands = [[], [], [], []]
+    if not isinstance(value, list):
+        return hands
+    for index, tiles in enumerate(value[:4]):
+        hands[index] = normalize_tile_list(tiles)
+    return hands
+
+
+def normalize_dora_markers(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(tile) for tile in value if tile is not None]
+    if isinstance(value, str):
+        return [value]
+    return []
+
+
+def same_tile_family(left: str, right: str) -> bool:
+    return left.replace("r", "") == right.replace("r", "")
+
+
+def remove_tile_once(tiles: list[str], tile: str | None) -> None:
+    if not tile:
+        return
+    try:
+        tiles.remove(tile)
+        return
+    except ValueError:
+        pass
+    for index, candidate in enumerate(tiles):
+        if same_tile_family(candidate, tile):
+            tiles.pop(index)
+            return
+    if "?" in tiles:
+        tiles.remove("?")
+
+
+def remove_tile_from_end(tiles: list[str], tile: str | None) -> None:
+    if not tile:
+        return
+    for index in range(len(tiles) - 1, -1, -1):
+        if tiles[index] == tile:
+            tiles.pop(index)
+            return
+    for index in range(len(tiles) - 1, -1, -1):
+        if same_tile_family(tiles[index], tile):
+            tiles.pop(index)
+            return
+    if "?" in tiles:
+        tiles.remove("?")
+
+
+def remove_tiles(tiles: list[str], removed: list[str]) -> None:
+    for tile in removed:
+        remove_tile_once(tiles, tile)
+
+
+def kyoku_to_index(bakaze: str, kyoku: int) -> int:
+    wind_offset = {"E": 0, "S": 4, "W": 8, "N": 12}.get(bakaze, 0)
+    return wind_offset + max(kyoku - 1, 0)
+
+
+class ReviewTableState:
+    def __init__(self, target_actor: int) -> None:
+        self.target_actor = target_actor
+        self.bakaze = "E"
+        self.kyoku = 1
+        self.honba = 0
+        self.kyotaku = 0
+        self.oya = 0
+        self.scores = [25000, 25000, 25000, 25000]
+        self.dora_markers: list[str] = []
+        self.hands: list[list[str]] = [[], [], [], []]
+        self.drawn_tiles: list[str | None] = [None, None, None, None]
+        self.discards: list[list[dict[str, Any]]] = [[], [], [], []]
+        self.melds: list[list[dict[str, Any]]] = [[], [], [], []]
+        self.riichi: list[bool] = [False, False, False, False]
+        self.pending_riichi: set[int] = set()
+        self.tiles_left = 70
+        self.last_event: dict[str, Any] | None = None
+        self.last_actor: int | None = None
+        self.last_tile: str | None = None
+
+    def apply(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        actor = normalize_actor(event.get("actor"))
+        tile = event.get("pai") if isinstance(event.get("pai"), str) else None
+        self.last_event = event
+        if actor is not None:
+            self.last_actor = actor
+        if tile is not None:
+            self.last_tile = tile
+
+        if event_type == "start_kyoku":
+            self.bakaze = str(event.get("bakaze") or "E")
+            self.kyoku = int(event.get("kyoku", kyoku_to_index(self.bakaze, 1) + 1) or 1)
+            self.honba = int(event.get("honba", 0) or 0)
+            self.kyotaku = int(event.get("kyotaku", 0) or 0)
+            self.oya = normalize_actor(event.get("oya")) or 0
+            scores = event.get("scores")
+            if isinstance(scores, list) and len(scores) >= 4:
+                self.scores = [int(score) for score in scores[:4]]
+            self.dora_markers = normalize_dora_markers(event.get("dora_marker"))
+            self.hands = normalize_four_tile_lists(event.get("tehais"))
+            self.drawn_tiles = [None, None, None, None]
+            self.discards = [[], [], [], []]
+            self.melds = [[], [], [], []]
+            self.riichi = [False, False, False, False]
+            self.pending_riichi = set()
+            self.tiles_left = 70
+            return
+
+        if event_type == "dora":
+            self.dora_markers.extend(normalize_dora_markers(event.get("dora_marker")))
+            return
+
+        if actor is None:
+            if event_type in {"hora", "ryukyoku", "end_game"}:
+                self.apply_score_update(event)
+            return
+
+        if event_type == "tsumo":
+            draw_tile = tile or "?"
+            self.drawn_tiles[actor] = draw_tile
+            self.hands[actor].append(draw_tile)
+            self.tiles_left = max(0, self.tiles_left - 1)
+            return
+
+        if event_type == "dahai":
+            discard_tile = tile or self.drawn_tiles[actor] or "?"
+            if self.drawn_tiles[actor] is not None and same_tile_family(self.drawn_tiles[actor] or "", discard_tile):
+                remove_tile_from_end(self.hands[actor], discard_tile)
+                self.drawn_tiles[actor] = None
+            else:
+                remove_tile_once(self.hands[actor], discard_tile)
+            riichi_discard = actor in self.pending_riichi
+            self.discards[actor].append(
+                {
+                    "pai": discard_tile,
+                    "tsumogiri": bool(event.get("tsumogiri", False)),
+                    "riichi": riichi_discard,
+                    "called": False,
+                },
+            )
+            return
+
+        if event_type == "reach":
+            self.pending_riichi.add(actor)
+            return
+
+        if event_type == "reach_accepted":
+            self.riichi[actor] = True
+            if actor in self.pending_riichi:
+                self.pending_riichi.remove(actor)
+            self.scores[actor] -= 1000
+            self.kyotaku += 1
+            return
+
+        if event_type in {"chi", "pon", "daiminkan"}:
+            target = normalize_actor(event.get("target"))
+            if target is not None and self.discards[target]:
+                self.discards[target][-1]["called"] = True
+            consumed = normalize_tile_list(event.get("consumed"))
+            remove_tiles(self.hands[actor], consumed)
+            self.drawn_tiles[actor] = None
+            self.melds[actor].append(
+                {
+                    "type": event_type,
+                    "pai": tile,
+                    "consumed": consumed,
+                    "target": target,
+                },
+            )
+            return
+
+        if event_type == "ankan":
+            consumed = normalize_tile_list(event.get("consumed")) or ([tile] * 4 if tile else [])
+            remove_tiles(self.hands[actor], consumed)
+            self.drawn_tiles[actor] = None
+            self.melds[actor].append({"type": event_type, "pai": tile, "consumed": consumed, "target": actor})
+            return
+
+        if event_type == "kakan":
+            consumed = normalize_tile_list(event.get("consumed")) or ([tile] if tile else [])
+            remove_tiles(self.hands[actor], consumed)
+            self.drawn_tiles[actor] = None
+            self.melds[actor].append(
+                {
+                    "type": event_type,
+                    "pai": tile,
+                    "consumed": consumed,
+                    "target": normalize_actor(event.get("target")) or actor,
+                },
+            )
+            return
+
+        if event_type in {"hora", "ryukyoku", "end_game"}:
+            self.apply_score_update(event)
+
+    def apply_score_update(self, event: dict[str, Any]) -> None:
+        scores = event.get("scores")
+        if isinstance(scores, list) and len(scores) >= 4:
+            self.scores = [int(score) for score in scores[:4]]
+            return
+
+        deltas = event.get("deltas")
+        if isinstance(deltas, list) and len(deltas) >= 4:
+            self.scores = [score + int(delta) for score, delta in zip(self.scores, deltas[:4])]
+
+    def snapshot(self, trigger_event: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "trigger_event": trigger_event,
+            "target_actor": self.target_actor,
+            "table": {
+                "target_actor": self.target_actor,
+                "bakaze": self.bakaze,
+                "kyoku": self.kyoku,
+                "kyoku_index": kyoku_to_index(self.bakaze, self.kyoku),
+                "honba": self.honba,
+                "kyotaku": self.kyotaku,
+                "oya": self.oya,
+                "scores": list(self.scores),
+                "dora_markers": list(self.dora_markers),
+                "hands": [list(hand) for hand in self.hands],
+                "drawn_tiles": list(self.drawn_tiles),
+                "discards": [[dict(discard) for discard in discards] for discards in self.discards],
+                "melds": [[dict(meld) for meld in melds] for melds in self.melds],
+                "riichi": list(self.riichi),
+                "pending_riichi": sorted(self.pending_riichi),
+                "tiles_left": self.tiles_left,
+                "last_actor": self.last_actor,
+                "last_tile": self.last_tile,
+            },
+        }
+
+
 def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not settings.mjai_reviewer_manifest.exists():
         return events
@@ -510,6 +760,7 @@ def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[di
 
 def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason: str) -> ReviewRunResult:
     entries: list[ReviewEntryDraft] = []
+    table_state = ReviewTableState(target_actor)
     kyoku_index = -1
     honba = 0
     junme = 0
@@ -519,6 +770,7 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
 
     for event in events:
         event_type = event.get("type")
+        table_state.apply(event)
         if event_type == "start_kyoku":
             kyoku_index += 1
             honba = int(event.get("honba", 0))
@@ -565,10 +817,7 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
                         "engine_meta": {"mode": "fallback"},
                     },
                 ],
-                state_snapshot={
-                    "trigger_event": event,
-                    "target_actor": target_actor,
-                },
+                state_snapshot=table_state.snapshot(event),
                 tags=["fallback"],
             ),
         )
@@ -797,6 +1046,7 @@ def build_review(
     target_actor: int,
 ) -> ReviewRunResult:
     entries: list[ReviewEntryDraft] = []
+    table_state = ReviewTableState(target_actor)
     kyoku_index = -1
     honba = 0
     junme = 0
@@ -807,6 +1057,7 @@ def build_review(
 
     for index, event in enumerate(events):
         event_type = event.get("type")
+        table_state.apply(event)
         if event_type == "start_kyoku":
             kyoku_index += 1
             honba = int(event.get("honba", 0))
@@ -880,10 +1131,7 @@ def build_review(
                         "engine_meta": meta,
                     }
                 ],
-                state_snapshot={
-                    "trigger_event": event,
-                    "target_actor": target_actor,
-                },
+                state_snapshot=table_state.snapshot(event),
                 tags=tags,
             ),
         )

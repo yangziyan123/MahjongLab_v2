@@ -5,6 +5,9 @@ const urlParams = new URLSearchParams(window.location.search);
 let autoConnectTriggered = false;
 
 function send(data){
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        return;
+    }
     const buffer = new TextEncoder().encode(JSON.stringify(data) + '\n');
     ws.send(buffer);
 }

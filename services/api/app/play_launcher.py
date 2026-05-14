@@ -345,6 +345,21 @@ class MahjongAiLauncher:
             honba = int(game.get("honba", 0))
             bakaze = "E" if round_index < 4 else "S"
             kyoku = (round_index % 4) + 1
+            self_info = message.get("self", {})
+            observed_actor = self_info.get("seat") if isinstance(self_info, dict) else None
+            tehais = []
+            for agent in agents[:4]:
+                if not isinstance(agent, dict):
+                    continue
+                try:
+                    tile_count = int(agent.get("tile_count") or 13)
+                except (TypeError, ValueError):
+                    tile_count = 13
+                tehais.append(["?"] * max(tile_count, 0))
+            while len(tehais) < 4:
+                tehais.append([])
+            if isinstance(observed_actor, int) and 0 <= observed_actor <= 3 and isinstance(self_info, dict):
+                tehais[observed_actor] = [self._tile_to_mjai(tile_id) for tile_id in self_info.get("tiles", [])]
             if self._recorder is not None and not self._recorder.started:
                 converted.append({"type": "start_game"})
                 self._recorder.started = True
@@ -359,6 +374,7 @@ class MahjongAiLauncher:
                     "oya": int(game.get("oya", round_index % 4)),
                     "dora_marker": [self._tile_to_mjai(x) for x in game.get("dora_indicator", [])],
                     "scores": [int(agent.get("score", 250) * 100) for agent in game.get("agents", [])],
+                    "tehais": tehais,
                 },
             )
             return converted
@@ -516,6 +532,16 @@ class MahjongAiLauncher:
 
                     if message.get("event") == "join":
                         joined = True
+                    if message.get("event") == "start":
+                        game = message.get("game", {})
+                        target_actor = target_actor_from_agents(game.get("agents", []), recorder.username)
+                        self_info = message.get("self", {})
+                        observed_actor = self_info.get("seat") if isinstance(self_info, dict) else None
+                        if target_actor is not None and observed_actor != target_actor:
+                            change_ob_message = {"event": "change_ob", "username": recorder.username}
+                            stream.write((json.dumps(change_ob_message) + "\n").encode("utf-8"))
+                            stream.flush()
+                            continue
                     converted_events = self._convert_protocol_event(recorder, message)
                     for event in converted_events:
                         self._append_match_event(recorder.match_id, event)

@@ -5,10 +5,8 @@ import {
   ArrowRightCircle,
   BookmarkCheck,
   BookmarkPlus,
-  CheckCircle2,
   Clock3,
   Layers3,
-  TrendingDown,
   Trash2,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
@@ -99,6 +97,7 @@ export function ReviewReport() {
     reset,
   } = useReviewReportStore();
   const entryFromQuery = Number(searchParams.get("entry") ?? "");
+  const entryQuery = Number.isInteger(entryFromQuery) && entryFromQuery > 0 ? `?entry=${entryFromQuery}` : "";
 
   useEffect(() => {
     reset();
@@ -285,6 +284,11 @@ export function ReviewReport() {
               <h1 className="ml-4 text-2xl font-bold text-slate-900">复盘报告</h1>
             </div>
             <div className="flex gap-2">
+              <Link to={`/review/replay/${reportId}${entryQuery}`}>
+                <Button variant="outline" size="sm">
+                  逐步复盘
+                </Button>
+              </Link>
               <Link to="/training/mistakes">
                 <Button variant="outline" size="sm">
                   错题库
@@ -540,7 +544,7 @@ export function ReviewReport() {
                           <div className="text-sm text-blue-900">
                             这手没有命中推荐动作。当前差异等级为
                             <span className="mx-1 font-semibold">{selectedEntry.deviation_level}</span>
-                            ，可以结合下方候选动作和状态快照理解偏差原因。
+                            ，可以结合下方候选动作和局面信息理解偏差原因。
                           </div>
                         </div>
                       )}
@@ -659,21 +663,6 @@ export function ReviewReport() {
                       </CardContent>
                     </Card>
                   </div>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center">
-                        <TrendingDown className="mr-2 h-5 w-5" />
-                        状态快照
-                      </CardTitle>
-                      <CardDescription>展示该决策点对应的结构化状态信息。</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <pre className="overflow-x-auto rounded-xl bg-slate-950 p-4 text-xs text-slate-100">
-                        {JSON.stringify(selectedEntry.state_snapshot, null, 2)}
-                      </pre>
-                    </CardContent>
-                  </Card>
                 </>
               ) : (
                 <Card>

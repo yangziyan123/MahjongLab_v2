@@ -72,7 +72,7 @@ export function ReviewTask() {
       return;
     }
     const timer = window.setTimeout(() => {
-      navigate(`/review/report/${jobQuery.data?.review_id}`);
+      navigate(`/review/open/${jobQuery.data?.review_id}`);
     }, 1200);
     return () => window.clearTimeout(timer);
   }, [jobQuery.data?.review_id, jobQuery.data?.status, navigate]);
@@ -171,9 +171,9 @@ export function ReviewTask() {
 
                 {job.status === "completed" && job.review_id && (
                   <div className="flex gap-4">
-                    <Link to={`/review/report/${job.review_id}`} className="flex-1">
+                    <Link to={`/review/open/${job.review_id}`} className="flex-1">
                       <Button size="lg" className="w-full">
-                        查看报告
+                        打开复盘
                       </Button>
                     </Link>
                     <Link to="/review/history" className="flex-1">

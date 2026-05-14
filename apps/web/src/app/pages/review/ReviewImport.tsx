@@ -555,7 +555,7 @@ export function ReviewImport() {
               {recentReviews.map((review) => (
                 <Link
                   key={review.id}
-                  to={`/review/report/${review.id}`}
+                  to={`/review/open/${review.id}`}
                   className="block rounded-lg border border-slate-200 p-4 transition-colors hover:bg-slate-50"
                 >
                   <div className="flex items-start justify-between gap-4">

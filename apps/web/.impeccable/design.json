@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-14T00:00:00+08:00",
+  "title": "Design System: MahjongLab",
+  "extensions": {
+    "colorMeta": {
+      "ink-primary": {
+        "role": "primary",
+        "displayName": "Deep Ink Primary",
+        "canonical": "#030213",
+        "tonalRamp": [
+          "oklch(15% 0.02 275)",
+          "oklch(25% 0.025 275)",
+          "oklch(35% 0.025 275)",
+          "oklch(45% 0.02 275)",
+          "oklch(58% 0.018 275)",
+          "oklch(72% 0.014 275)",
+          "oklch(86% 0.01 275)",
+          "oklch(95% 0.006 275)"
+        ]
+      },
+      "selection-blue": {
+        "role": "primary",
+        "displayName": "Selection Blue",
+        "canonical": "#2563eb",
+        "tonalRamp": [
+          "oklch(18% 0.07 260)",
+          "oklch(30% 0.1 260)",
+          "oklch(42% 0.14 260)",
+          "oklch(54% 0.18 260)",
+          "oklch(66% 0.16 260)",
+          "oklch(78% 0.11 260)",
+          "oklch(88% 0.06 260)",
+          "oklch(96% 0.025 260)"
+        ]
+      },
+      "table-green": {
+        "role": "secondary",
+        "displayName": "Table Green",
+        "canonical": "#064e3b",
+        "tonalRamp": [
+          "oklch(16% 0.04 165)",
+          "oklch(25% 0.06 165)",
+          "oklch(34% 0.075 165)",
+          "oklch(45% 0.08 165)",
+          "oklch(58% 0.075 165)",
+          "oklch(72% 0.055 165)",
+          "oklch(86% 0.03 165)",
+          "oklch(95% 0.015 165)"
+        ]
+      },
+      "danger-red": {
+        "role": "tertiary",
+        "displayName": "Danger Red",
+        "canonical": "#d4183d",
+        "tonalRamp": [
+          "oklch(18% 0.07 20)",
+          "oklch(30% 0.11 20)",
+          "oklch(42% 0.15 20)",
+          "oklch(54% 0.18 20)",
+          "oklch(66% 0.14 20)",
+          "oklch(78% 0.09 20)",
+          "oklch(88% 0.045 20)",
+          "oklch(96% 0.02 20)"
+        ]
+      },
+      "app-bg": {
+        "role": "neutral",
+        "displayName": "App Background",
+        "canonical": "#f8fafc",
+        "tonalRamp": [
+          "oklch(15% 0.01 260)",
+          "oklch(25% 0.01 260)",
+          "oklch(38% 0.01 260)",
+          "oklch(52% 0.008 260)",
+          "oklch(66% 0.008 260)",
+          "oklch(80% 0.006 260)",
+          "oklch(91% 0.004 260)",
+          "oklch(98% 0.003 260)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Page-level names and report hero titles only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Main page titles and major state titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Card titles, panel titles, and section headings."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Forms, descriptions, reports, and explanatory copy."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, badges, filter labels, and compact metadata."
+      }
+    },
+    "shadows": [
+      {
+        "name": "soft-surface",
+        "value": "shadow-sm",
+        "purpose": "Light separation for headers and quiet cards."
+      },
+      {
+        "name": "interactive-lift",
+        "value": "hover:shadow-md / hover:shadow-lg",
+        "purpose": "Hover feedback for clickable cards and list items."
+      },
+      {
+        "name": "overlay-lift",
+        "value": "shadow-lg / shadow-xl",
+        "purpose": "Menus, overlays, report hero panels, and mahjong table containers."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "150ms-250ms ease-out",
+        "purpose": "Default hover, focus, selected, loading, and reveal feedback."
+      },
+      {
+        "name": "radix-overlay-transition",
+        "value": "fade + zoom, duration 200ms",
+        "purpose": "Popover, select, dialog, and tooltip state changes."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      },
+      {
+        "name": "xl",
+        "value": "1280px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary command button for the single strongest action on a surface.",
+      "html": "<button class=\"ds-btn-primary\">导入牌谱</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 8px 16px; border: 1px solid transparent; border-radius: 8px; background: #030213; color: #ffffff; font: 500 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; transition: background-color 180ms ease-out, box-shadow 180ms ease-out; } .ds-btn-primary:hover { background: rgba(3, 2, 19, 0.9); } .ds-btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(113, 113, 130, 0.5); }"
+    },
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Secondary action button for navigation, history, and non-primary commands.",
+      "html": "<button class=\"ds-btn-outline\">查看历史复盘</button>",
+      "css": ".ds-btn-outline { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 36px; padding: 8px 16px; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; background: #ffffff; color: #030213; font: 500 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; transition: background-color 180ms ease-out, color 180ms ease-out, box-shadow 180ms ease-out; } .ds-btn-outline:hover { background: #e9ebef; } .ds-btn-outline:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(113, 113, 130, 0.5); }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Standard text field for search, URLs, IDs, and form values.",
+      "html": "<input class=\"ds-input\" placeholder=\"输入 Tenhou URL 或牌谱 ID\" />",
+      "css": ".ds-input { width: 100%; height: 36px; min-width: 0; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px; background: #f8fafc; color: #030213; font: 400 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; transition: border-color 180ms ease-out, box-shadow 180ms ease-out; } .ds-input::placeholder { color: #717182; } .ds-input:focus-visible { outline: none; border-color: #717182; box-shadow: 0 0 0 3px rgba(113, 113, 130, 0.5); }"
+    },
+    {
+      "name": "Default Card",
+      "kind": "card",
+      "refersTo": "card-default",
+      "description": "Quiet content container for reports, history rows, and workflow panels.",
+      "html": "<section class=\"ds-card\"><h3>AI 复盘分析</h3><p>导入牌谱后即可查看逐手复盘结果。</p></section>",
+      "css": ".ds-card { display: flex; flex-direction: column; gap: 16px; padding: 24px; border: 1px solid rgba(0,0,0,0.1); border-radius: 14px; background: #ffffff; color: #030213; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; } .ds-card h3 { margin: 0; font-size: 16px; line-height: 1.5; font-weight: 500; } .ds-card p { margin: 0; color: #717182; font-size: 14px; line-height: 1.5; } .ds-card:hover { box-shadow: 0 4px 14px rgba(15,23,42,0.08); }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-secondary",
+      "description": "Compact status marker for deviation, match quality, and category tags.",
+      "html": "<span class=\"ds-badge\">命中最优</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; justify-content: center; width: fit-content; white-space: nowrap; gap: 4px; padding: 2px 8px; border: 1px solid transparent; border-radius: 8px; background: #ececf0; color: #030213; font: 500 12px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; transition: background-color 180ms ease-out, box-shadow 180ms ease-out; } .ds-badge:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(113, 113, 130, 0.5); }"
+    },
+    {
+      "name": "Mahjong Table Panel",
+      "kind": "custom",
+      "refersTo": "mahjong-review-table",
+      "description": "Signature deep-green review table for replay and decision-state context.",
+      "html": "<section class=\"ds-table\"><div class=\"ds-table-stat\"><span>局面</span><strong>东1局 0 本场</strong></div><div class=\"ds-table-center\"><span>第 8 巡</span><strong>需要复盘</strong></div><div class=\"ds-tile-row\"><span class=\"ds-tile\">5万</span><span class=\"ds-tile ds-tile-red\">赤5筒</span><span class=\"ds-tile ds-tile-active\">东</span></div></section>",
+      "css": ".ds-table { display: grid; gap: 12px; padding: 16px; border: 1px solid #064e3b; border-radius: 14px; background: #064e3b; color: #ffffff; box-shadow: 0 18px 40px rgba(2,44,34,0.24); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; } .ds-table-stat { padding: 12px; border-radius: 10px; background: rgba(2,44,34,0.7); } .ds-table-stat span, .ds-table-center span { display: block; color: #a7f3d0; font-size: 12px; line-height: 1.5; } .ds-table-stat strong, .ds-table-center strong { display: block; margin-top: 4px; font-size: 16px; line-height: 1.5; } .ds-table-center { min-height: 96px; display: grid; place-items: center; text-align: center; padding: 16px; border: 1px solid rgba(16,185,129,0.45); border-radius: 14px; background: rgba(6,78,59,0.8); } .ds-tile-row { display: flex; gap: 6px; align-items: end; justify-content: center; flex-wrap: wrap; } .ds-tile { display: inline-flex; width: 36px; height: 48px; align-items: center; justify-content: center; border: 1px solid #e2e8f0; border-radius: 4px; background: #ffffff; color: #020617; font-size: 12px; font-weight: 700; box-shadow: 0 1px 2px rgba(15,23,42,0.12); } .ds-tile-red { color: #dc2626; } .ds-tile-active { box-shadow: 0 0 0 2px #7dd3fc, 0 0 0 3px #022c22; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "冷静牌桌实验室",
+    "overview": "MahjongLab 的界面应该像一张安静、可信、随时可复盘的分析牌桌。它不是营销页，也不是炫技仪表盘；它是认真玩家完成导入、阅读报告、比较动作、积累错题和进入训练的工作台。视觉系统以浅色工作区为主体，使用深墨色承载主操作，使用低饱和中性色建立层级，再把深绿牌桌留给麻将状态和回放场景。\n\n产品气质是简洁、专业、有高级感。趣味只出现在状态反馈、牌桌变化、回放进度和学习闭环的关键节点里。系统明确拒绝普通 AI 生成的紫蓝渐变、过多玻璃拟态、卡片套卡片，以及花哨但没意义的动效。",
+    "keyCharacteristics": [
+      "克制浅色工具界面，优先保证报告和牌桌信息可读。",
+      "深墨色主操作，蓝色只用于选择和聚焦，绿色只在麻将牌桌和正向状态里承担语义。",
+      "组件形态稳定，圆角适中，边框轻，阴影少。",
+      "动效服务加载、筛选、选中、回放和状态变化，不做页面入场表演。"
+    ],
+    "rules": [
+      {
+        "name": "The One Accent Rule",
+        "body": "同一普通工具屏幕只允许一个主状态色占据注意力。报告筛选列表用蓝色选中，偏差状态用语义色，其他区域回到中性。",
+        "section": "colors"
+      },
+      {
+        "name": "The Table Green Rule",
+        "body": "深绿只属于麻将牌桌、回放和局面状态。不要把它扩散成全站品牌背景。",
+        "section": "colors"
+      },
+      {
+        "name": "The No Purple Gradient Rule",
+        "body": "禁止普通 AI 生成的紫蓝渐变。任何渐变都必须有明确场景含义，目前默认不用。",
+        "section": "colors"
+      },
+      {
+        "name": "The Native Tool Rule",
+        "body": "使用系统 sans，保持产品界面的本机感。不要为装饰性高级感牺牲中文可读性和数据扫描效率。",
+        "section": "typography"
+      },
+      {
+        "name": "The Data First Rule",
+        "body": "数字、动作、偏差和局面标签优先清晰。字体层级必须帮助玩家更快定位失误，而不是制造视觉表演。",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat By Default Rule",
+        "body": "静止界面默认平。阴影必须说明层级、hover、弹层或牌桌场景，不得为了高级感滥用。",
+        "section": "elevation"
+      },
+      {
+        "name": "The No Glass Default Rule",
+        "body": "`backdrop-blur` 只允许用于粘性顶栏或浮层可读性，不作为装饰风格扩散。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do 保持工具型产品的克制：浅色工作区、轻边框、稳定组件和清晰数据优先。",
+      "Do 把深绿留给麻将牌桌、回放和局面状态，让它成为项目识别点。",
+      "Do 用颜色加文字共同表达偏差、成功、警告和错误，满足色盲可读性。",
+      "Do 使用 150 到 250ms 的状态动效表达 hover、focus、loading、筛选切换、回放进度和选中变化。",
+      "Do 使用 8px 到 14px 的圆角范围，除麻将牌张或小控件外不要突然改变组件词汇。",
+      "Do 让导入、复盘、回放、错题库、训练之间的路径始终可见。"
+    ],
+    "donts": [
+      "Don't 使用普通 AI 生成的紫蓝渐变。",
+      "Don't 使用过多玻璃拟态；`backdrop-blur` 只能服务顶栏或浮层可读性。",
+      "Don't 做卡片套卡片。需要分组时使用间距、边框、背景带或列表结构。",
+      "Don't 加入花哨但没意义的动效。没有状态含义的动效禁止出现。",
+      "Don't 使用彩色 `border-left` 或 `border-right` 侧边条作为卡片强调。",
+      "Don't 用渐变文字、装饰性 hero、重复 icon-card 网格或营销页布局包装产品工作流。",
+      "Don't 在按钮、标签、数据或表单里使用显示字体。"
+    ]
+  }
+}

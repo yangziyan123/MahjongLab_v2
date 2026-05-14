@@ -2,7 +2,9 @@ import { createBrowserRouter } from "react-router";
 import { Home } from "./pages/Home";
 import { ReviewImport } from "./pages/review/ReviewImport";
 import { ReviewTask } from "./pages/review/ReviewTask";
+import { ReviewOpen } from "./pages/review/ReviewOpen";
 import { ReviewReport } from "./pages/review/ReviewReport";
+import { ReviewReplay } from "./pages/review/ReviewReplay";
 import { ReviewHistory } from "./pages/review/ReviewHistory";
 import { MistakeLibrary } from "./pages/training/MistakeLibrary";
 import { PlayConfig } from "./pages/play/PlayConfig";
@@ -23,6 +25,14 @@ export const router = createBrowserRouter([
   {
     path: "/review/task/:taskId",
     Component: ReviewTask,
+  },
+  {
+    path: "/review/open/:reportId",
+    Component: ReviewOpen,
+  },
+  {
+    path: "/review/replay/:reportId",
+    Component: ReviewReplay,
   },
   {
     path: "/review/report/:reportId",

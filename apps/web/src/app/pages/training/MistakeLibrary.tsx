@@ -270,7 +270,7 @@ export function MistakeLibrary() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Link to={`/review/report/${item.review_id}?entry=${item.review_entry_id}`}>
+                        <Link to={`/review/open/${item.review_id}?entry=${item.review_entry_id}`}>
                           <Button variant="outline" size="sm">
                             <Eye className="mr-2 h-4 w-4" />
                             回到报告

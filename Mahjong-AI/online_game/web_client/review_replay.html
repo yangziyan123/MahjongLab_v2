@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="user-scalable=no, width=device-width, initial-scale=1.0" />
+    <base href="/api/mahjong-ai-web/" />
+    <title>MahjongLab Review Replay</title>
+    <style>
+        ::-webkit-scrollbar {
+            display: none;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+        }
+
+        #connecting-form {
+            display: none !important;
+        }
+
+        #notification-container {
+            position: fixed;
+            bottom: 12px;
+            left: 12px;
+            z-index: 1000;
+            pointer-events: none;
+        }
+
+        .notification {
+            max-width: 280px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            background-color: rgba(15, 23, 42, 0.9);
+            color: #fff;
+            padding: 10px 12px;
+            font: 13px/1.4 Arial, sans-serif;
+            opacity: 0;
+            transition: opacity 0.25s ease;
+        }
+    </style>
+    <script>
+        function alert(message) {
+            const container = document.getElementById("notification-container");
+            if (!container || !message) {
+                return;
+            }
+            const notification = document.createElement("div");
+            notification.className = "notification";
+            notification.textContent = message;
+            container.appendChild(notification);
+            setTimeout(() => {
+                notification.style.opacity = "1";
+            }, 0);
+            setTimeout(() => {
+                notification.style.opacity = "0";
+                setTimeout(() => notification.remove(), 300);
+            }, 1200);
+        }
+    </script>
+</head>
+<body>
+    <div id="notification-container"></div>
+    <div id="connecting-form">
+        <input type="text" id="host" value="127.0.0.1" />
+        <input type="text" id="port" value="8888" />
+        <input type="text" id="username" value="review" />
+        <input type="checkbox" id="observerMode" checked />
+        <button id="connectBtn" type="button">connect</button>
+    </div>
+    <script src="js/src/phaser.min.js"></script>
+    <script src="js/src/render.js"></script>
+    <script src="js/src/communication.js"></script>
+    <script src="js/src/review_replay.js"></script>
+</body>
+</html>

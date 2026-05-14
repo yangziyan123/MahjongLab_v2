@@ -155,6 +155,47 @@ class MahjongScene extends Phaser.Scene {
         this.#wsFcn = fcn;
     }
 
+    resetReviewTable() {
+        const clearGroup = (group) => {
+            if (group && typeof group.clear === 'function') {
+                group.clear(true, true);
+            }
+        };
+
+        if (this.tweens && typeof this.tweens.killAll === 'function') {
+            this.tweens.killAll();
+        }
+        clearGroup(this.#handTiles);
+        clearGroup(this.#rightHand);
+        clearGroup(this.#oppoHand);
+        clearGroup(this.#leftHand);
+        clearGroup(this.#gameInfo);
+        clearGroup(this.#leftTileCount);
+        clearGroup(this.#riichiBa);
+        clearGroup(this.#yellowBars);
+        clearGroup(this.#dora);
+        clearGroup(this.#settlement);
+
+        if (Array.isArray(this.#playerInfo)) {
+            this.#playerInfo.forEach(clearGroup);
+        }
+        if (Array.isArray(this.#river)) {
+            this.#river.forEach(clearGroup);
+        }
+        if (Array.isArray(this.#furo)) {
+            this.#furo.forEach((furos) => {
+                Object.values(furos).forEach(clearGroup);
+            });
+        }
+        this.#furo = [{}, {}, {}, {}];
+
+        if (this.#furitenMark !== null) {
+            this.#furitenMark.destroy();
+            this.#furitenMark = null;
+        }
+        this.selectTile = false;
+    }
+
     getTileFrameIndex(tileId) {
         let akas = [16, 52, 88];
         let tile = Math.floor(tileId / 4);
@@ -247,6 +288,32 @@ class MahjongScene extends Phaser.Scene {
             duration: 200,
             ease: 'Power2'
         });
+    }
+
+    renderReviewDraw(tileId) {
+        if (tileId === null || tileId === undefined) {
+            return;
+        }
+
+        let length = this.#handTiles.getChildren().filter((child) => child.type !== 'Graphics').length;
+        let scale = globalScaleRate * 0.45;
+        let x = 40 * globalScaleRate + (117 + 2) * scale * (length + 1) + 10 * scale;
+        let y = this.sys.canvas.height - 60 * globalScaleRate;
+        let frameIndex = this.getTileFrameIndex(tileId);
+        let tile = this.#handTiles.create(x, y, 'tiles4', frameIndex).setScale(scale).setDepth(1000);
+        this.setHandTileInteractivity(tile);
+
+        let highlight = this.add.graphics();
+        highlight.lineStyle(4 * globalScaleRate, 0x38bdf8, 0.95);
+        highlight.strokeRoundedRect(
+            x - tile.displayWidth / 2 - 5 * globalScaleRate,
+            y - tile.displayHeight / 2 - 5 * globalScaleRate,
+            tile.displayWidth + 10 * globalScaleRate,
+            tile.displayHeight + 10 * globalScaleRate,
+            8 * globalScaleRate
+        );
+        highlight.setDepth(999);
+        this.#handTiles.add(highlight);
     }
 
     renderDiscard(seat, who, discardTile, discardIndex, riichi) {

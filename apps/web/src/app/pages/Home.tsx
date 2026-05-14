@@ -16,14 +16,14 @@ export function Home() {
   const recentReviews = recentReviewsQuery.data?.items ?? [];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_#f8fafc_0%,_#eff6ff_40%,_#eef2ff_100%)]">
+    <div className="flex min-h-screen flex-col bg-[radial-gradient(circle_at_top,_#f8fafc_0%,_#eff6ff_40%,_#eef2ff_100%)]">
       <header className="border-b border-slate-200/70 bg-white/85 shadow-sm backdrop-blur">
         <div className="container mx-auto px-4 py-6">
           <h1 className="text-3xl font-bold text-slate-900">MahjongLab</h1>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-12">
+      <main className="container mx-auto flex-1 px-4 py-12">
         <div className="mx-auto max-w-6xl">
           {/* <div className="mb-10">
             <Card className="bg-white/90 shadow-sm">
@@ -119,7 +119,7 @@ export function Home() {
                 {recentReviews.map((review) => (
                   <Link
                     key={review.id}
-                    to={`/review/report/${review.id}`}
+                    to={`/review/open/${review.id}`}
                     className="block rounded-lg border border-slate-200 p-4 transition-colors hover:bg-slate-50"
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -142,7 +142,7 @@ export function Home() {
         </div>
       </main>
 
-      <footer className="mt-16 border-t bg-white/90">
+      <footer className="mt-auto border-t bg-white/90">
         <div className="container mx-auto px-4 py-6 text-center text-slate-600">
           <p>MahjongLab - 以复盘与训练为核心的日麻平台</p>
         </div>

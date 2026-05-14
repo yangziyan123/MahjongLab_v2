@@ -95,7 +95,22 @@ class FallbackReviewTests(unittest.TestCase):
         result = run_fallback_review(
             [
                 {"type": "start_game"},
-                {"type": "start_kyoku", "honba": 0},
+                {
+                    "type": "start_kyoku",
+                    "bakaze": "E",
+                    "kyoku": 1,
+                    "honba": 0,
+                    "kyotaku": 0,
+                    "oya": 0,
+                    "scores": [25000, 25000, 25000, 25000],
+                    "dora_marker": "2s",
+                    "tehais": [
+                        ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "2p", "3p", "4p"],
+                        ["?"] * 13,
+                        ["?"] * 13,
+                        ["?"] * 13,
+                    ],
+                },
                 {"type": "tsumo", "actor": 0, "pai": "1m"},
                 {"type": "dahai", "actor": 0, "pai": "1m", "tsumogiri": True},
                 {"type": "end_kyoku"},
@@ -108,6 +123,14 @@ class FallbackReviewTests(unittest.TestCase):
         self.assertEqual(result.summary["reviewed_decision_count"], 1)
         self.assertEqual(result.entries[0].decision_type, "discard")
         self.assertTrue(result.entries[0].is_match)
+        table = result.entries[0].state_snapshot["table"]
+        self.assertEqual(table["target_actor"], 0)
+        self.assertEqual(table["dora_markers"], ["2s"])
+        self.assertEqual(table["discards"][0][0]["pai"], "1m")
+        self.assertEqual(
+            table["hands"][0],
+            ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "2p", "3p", "4p"],
+        )
 
 
 class PlayRecorderTests(unittest.TestCase):

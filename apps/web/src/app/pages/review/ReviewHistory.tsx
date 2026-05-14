@@ -205,7 +205,7 @@ export function ReviewHistory() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Link to={`/review/report/${report.id}`}>
+                        <Link to={`/review/open/${report.id}`}>
                           <Button variant="outline" size="sm">
                             <Eye className="mr-2 h-4 w-4" />
                             查看

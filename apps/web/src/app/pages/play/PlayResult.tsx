@@ -53,7 +53,7 @@ export function PlayResult() {
     mutationFn: () => startPlayMatchReview(matchId),
     onSuccess: (job) => {
       if (job.review_id) {
-        navigate(`/review/report/${job.review_id}`);
+        navigate(`/review/open/${job.review_id}`);
         return;
       }
       navigate(`/review/task/${job.id}`);
@@ -111,7 +111,7 @@ export function PlayResult() {
     reviewMutation.isPending || (!canStartReview && latestReviewJobForCurrentSnapshot?.status !== "completed");
   const reviewButtonLabel = latestReviewJobForCurrentSnapshot
     ? latestReviewJobForCurrentSnapshot.status === "completed"
-      ? "查看复盘报告"
+      ? "打开复盘"
       : latestReviewJobForCurrentSnapshot.status === "failed"
       ? "重新开始复盘"
       : "查看复盘进度"
@@ -120,7 +120,7 @@ export function PlayResult() {
   const handleStartReview = () => {
     if (latestReviewJobForCurrentSnapshot && latestReviewJobForCurrentSnapshot.status !== "failed") {
       if (latestReviewJobForCurrentSnapshot.review_id) {
-        navigate(`/review/report/${latestReviewJobForCurrentSnapshot.review_id}`);
+        navigate(`/review/open/${latestReviewJobForCurrentSnapshot.review_id}`);
         return;
       }
       navigate(`/review/task/${latestReviewJobForCurrentSnapshot.id}`);

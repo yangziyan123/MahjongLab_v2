@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -36,6 +37,14 @@ from .schemas import (
 
 app = FastAPI(title="MahjongLab API", version="0.1.0")
 play_launcher = MahjongAiLauncher(settings)
+
+mahjong_ai_web_client_dir = settings.mahjong_ai_root / "online_game" / "web_client"
+if mahjong_ai_web_client_dir.exists():
+    app.mount(
+        "/api/mahjong-ai-web",
+        StaticFiles(directory=mahjong_ai_web_client_dir),
+        name="mahjong_ai_web",
+    )
 
 
 def utcnow() -> datetime:
