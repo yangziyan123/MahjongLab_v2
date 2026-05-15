@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import locale
 import os
 import subprocess
 import tempfile
@@ -37,6 +38,36 @@ DECISION_TYPE_MAP = {
 
 class ReviewExecutionError(RuntimeError):
     pass
+
+
+def decode_text_bytes(data: bytes | str | None) -> str:
+    if data is None:
+        return ""
+    if isinstance(data, str):
+        return data
+    if not data:
+        return ""
+
+    preferred_encoding = locale.getpreferredencoding(False)
+    encodings = ["utf-8-sig", preferred_encoding, "gb18030", "cp936"]
+    seen: set[str] = set()
+    for encoding in encodings:
+        normalized = encoding.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            return data.decode(encoding)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def read_text_compat(file_path: Path) -> str:
+    try:
+        return file_path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return decode_text_bytes(file_path.read_bytes())
 
 
 @dataclass(slots=True)
@@ -231,8 +262,6 @@ def convert_external_log_to_mjai(raw_path: Path, normalized_path: Path, source_l
             command,
             cwd=settings.repo_root,
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=300,
             check=False,
         )
@@ -242,8 +271,10 @@ def convert_external_log_to_mjai(raw_path: Path, normalized_path: Path, source_l
         raise ReviewExecutionError(f"{source_label} import timed out while converting to mjai") from exc
 
     if process.returncode != 0:
+        stdout = decode_text_bytes(process.stdout)
+        stderr = decode_text_bytes(process.stderr)
         raise ReviewExecutionError(
-            f"failed to convert {source_label} log to mjai:\n" + summarize_process_output(process.stdout, process.stderr),
+            f"failed to convert {source_label} log to mjai:\n" + summarize_process_output(stdout, stderr),
         )
 
 
@@ -381,7 +412,7 @@ def validate_explicit_majsoul_target_actor(job: ReviewJob) -> int:
 
 
 def load_events_from_file(file_path: Path) -> list[dict[str, Any]]:
-    content = file_path.read_text(encoding="utf-8").strip()
+    content = read_text_compat(file_path).strip()
     if not content:
         raise ReviewExecutionError(f"empty replay file: {file_path}")
     if content[0] == "[":
@@ -815,8 +846,6 @@ def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[di
                 command,
                 cwd=settings.repo_root,
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
                 timeout=180,
                 check=False,
             )
@@ -989,6 +1018,7 @@ def run_mortal_review(events: list[dict[str, Any]], target_actor: int) -> tuple[
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        errors="replace",
         env=env,
     )
 

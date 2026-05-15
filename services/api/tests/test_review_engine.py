@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
@@ -15,8 +16,10 @@ from app.models import Match, MatchEvent, ReviewJob, User
 from app.play_launcher import MahjongAiLauncher, MatchRecorder, target_actor_from_agents
 from app.review_engine import (
     ReviewExecutionError,
+    decode_text_bytes,
     determine_target_actor,
     is_tenhou_sanma_log,
+    load_events_from_file,
     load_events_for_job,
     normalize_internal_match_events_for_mjai,
     next_actual_action,
@@ -90,6 +93,19 @@ class TargetActorValidationTests(unittest.TestCase):
         job = SimpleNamespace(source_type="majsoul_file", target_actor=None, target_player_ref="2")
 
         self.assertEqual(determine_target_actor(job), 2)
+
+
+class TextDecodingTests(unittest.TestCase):
+    def test_decode_text_bytes_falls_back_to_gb18030(self) -> None:
+        self.assertEqual(decode_text_bytes("错误信息".encode("gb18030")), "错误信息")
+
+    def test_load_events_from_file_accepts_gbk_jsonl(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            replay_path = Path(temp_dir) / "replay.jsonl"
+            payload = {"type": "start_game", "note": "中文备注"}
+            replay_path.write_bytes((json.dumps(payload, ensure_ascii=False) + "\n").encode("gb18030"))
+
+            self.assertEqual(load_events_from_file(replay_path), [payload])
 
 
 class FallbackReviewTests(unittest.TestCase):
