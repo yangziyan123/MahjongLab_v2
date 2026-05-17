@@ -72,7 +72,7 @@ def process_review_job(job_id: str) -> None:
             medium_deviation_count=result.summary["medium_deviation_count"],
             optimal_count=result.summary["optimal_count"],
             rating=result.rating,
-            temperature=None,
+            temperature=result.temperature,
             summary_json=result.summary,
             stats_json=result.stats,
             result_object_key="pending",

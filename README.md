@@ -82,7 +82,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ```powershell
 cd apps\web
-npm.cmd run dev -- --host 127.0.0.1 --port 5173
+![1778997596296](image/README/1778997596296.png)
 ```
 
 访问：

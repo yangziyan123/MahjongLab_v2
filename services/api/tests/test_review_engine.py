@@ -16,6 +16,7 @@ from app.models import Match, MatchEvent, ReviewJob, User
 from app.play_launcher import MahjongAiLauncher, MatchRecorder, target_actor_from_agents
 from app.review_engine import (
     ReviewExecutionError,
+    build_review,
     decode_text_bytes,
     determine_target_actor,
     is_tenhou_sanma_log,
@@ -149,6 +150,57 @@ class FallbackReviewTests(unittest.TestCase):
             table["hands"][0],
             ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "2p", "3p", "4p"],
         )
+
+
+class MortalReviewDetailsTests(unittest.TestCase):
+    def test_build_review_expands_mortal_q_values_into_candidate_details(self) -> None:
+        events = [
+            {
+                "type": "start_kyoku",
+                "bakaze": "E",
+                "kyoku": 1,
+                "honba": 0,
+                "kyotaku": 0,
+                "oya": 0,
+                "scores": [25000, 25000, 25000, 25000],
+                "dora_marker": "2s",
+                "tehais": [
+                    ["1m", "2m", "3m", "4m", "5m", "6m", "7m", "8m", "9m", "1p", "2p", "3p", "4p"],
+                    ["?"] * 13,
+                    ["?"] * 13,
+                    ["?"] * 13,
+                ],
+            },
+            {"type": "tsumo", "actor": 0, "pai": "5p"},
+            {"type": "dahai", "actor": 0, "pai": "1m", "tsumogiri": False},
+        ]
+        outputs = [
+            {"type": "none", "meta": {"mask_bits": 0}},
+            {
+                "type": "reach",
+                "actor": 0,
+                "meta": {
+                    "mask_bits": (1 << 0) | (1 << 1) | (1 << 2) | (1 << 37),
+                    "q_values": [0.0, 1.0, 1.1, 1.2],
+                    "shanten": 1,
+                    "at_furiten": False,
+                },
+            },
+            {"type": "none", "meta": {"mask_bits": 0}},
+        ]
+
+        result = build_review(events, outputs, {"model_tag": "test-model", "phi_matrix": []}, target_actor=0)
+
+        details = result.entries[0].details
+        self.assertEqual(len(details), 3)
+        self.assertEqual([detail["expected_action"]["type"] for detail in details], ["reach", "dahai", "dahai"])
+        self.assertEqual([detail["best_q_value"] for detail in details], [1.2, 1.1, 1.0])
+        self.assertGreater(sum(detail["prob"] for detail in details), 0.99)
+        self.assertLess(sum(detail["prob"] for detail in details), 1.0)
+        self.assertTrue(all(detail["prob"] > 0.01 for detail in details))
+        self.assertEqual(details[1]["expected_action"]["pai"], "3m")
+        self.assertEqual(details[2]["expected_action"]["pai"], "2m")
+        self.assertNotIn("1m", [detail["expected_action"].get("pai") for detail in details])
 
 
 class PlayRecorderTests(unittest.TestCase):

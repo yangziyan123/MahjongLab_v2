@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import locale
+import math
 import os
 import subprocess
 import tempfile
@@ -34,6 +35,51 @@ DECISION_TYPE_MAP = {
     "ryukyoku": "ryukyoku",
     "none": "pass",
 }
+MORTAL_REVIEW_TEMPERATURE = 0.1
+MORTAL_CANDIDATE_PROB_THRESHOLD = 0.01
+MJAI_PAI_STRINGS = [
+    "1m",
+    "2m",
+    "3m",
+    "4m",
+    "5m",
+    "6m",
+    "7m",
+    "8m",
+    "9m",
+    "1p",
+    "2p",
+    "3p",
+    "4p",
+    "5p",
+    "6p",
+    "7p",
+    "8p",
+    "9p",
+    "1s",
+    "2s",
+    "3s",
+    "4s",
+    "5s",
+    "6s",
+    "7s",
+    "8s",
+    "9s",
+    "E",
+    "S",
+    "W",
+    "N",
+    "P",
+    "F",
+    "C",
+    "5mr",
+    "5pr",
+    "5sr",
+    "?",
+]
+MJAI_PAI_INDEX = {tile: index for index, tile in enumerate(MJAI_PAI_STRINGS)}
+AKA_TILE_BY_BASE = {"5m": "5mr", "5p": "5pr", "5s": "5sr"}
+BASE_TILE_BY_AKA = {aka: base for base, aka in AKA_TILE_BY_BASE.items()}
 
 
 class ReviewExecutionError(RuntimeError):
@@ -98,6 +144,7 @@ class ReviewRunResult:
     engine_name: str
     engine_version: str
     model_tag: str | None
+    temperature: float | None
     rating: float
     summary: dict[str, Any]
     stats: dict[str, Any]
@@ -601,6 +648,46 @@ def same_tile_family(left: str, right: str) -> bool:
     return left.replace("r", "") == right.replace("r", "")
 
 
+def deaka_tile(tile: str) -> str:
+    return BASE_TILE_BY_AKA.get(tile, tile)
+
+
+def akaize_tile(tile: str) -> str:
+    return AKA_TILE_BY_BASE.get(tile, tile)
+
+
+def tile_index(tile: str | None) -> int | None:
+    if tile is None:
+        return None
+    return MJAI_PAI_INDEX.get(tile)
+
+
+def tile_next(tile: str) -> str:
+    index = tile_index(deaka_tile(tile))
+    if index is None or index >= MJAI_PAI_INDEX["?"]:
+        return tile
+
+    kind, number = divmod(index, 9)
+    if kind < 3:
+        return MJAI_PAI_STRINGS[kind * 9 + ((number + 1) % 9)]
+    if number < 4:
+        return MJAI_PAI_STRINGS[27 + ((number + 1) % 4)]
+    return MJAI_PAI_STRINGS[31 + ((number - 4 + 1) % 3)]
+
+
+def tile_prev(tile: str) -> str:
+    index = tile_index(deaka_tile(tile))
+    if index is None or index >= MJAI_PAI_INDEX["?"]:
+        return tile
+
+    kind, number = divmod(index, 9)
+    if kind < 3:
+        return MJAI_PAI_STRINGS[kind * 9 + ((number + 8) % 9)]
+    if number < 4:
+        return MJAI_PAI_STRINGS[27 + ((number + 3) % 4)]
+    return MJAI_PAI_STRINGS[31 + ((number - 4 + 2) % 3)]
+
+
 def remove_tile_once(tiles: list[str], tile: str | None) -> None:
     if not tile:
         return
@@ -662,6 +749,9 @@ class ReviewTableState:
         self.last_event: dict[str, Any] | None = None
         self.last_actor: int | None = None
         self.last_tile: str | None = None
+
+    def target_has_tile(self, tile: str) -> bool:
+        return tile in self.hands[self.target_actor]
 
     def apply(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
@@ -992,6 +1082,7 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
         engine_name="mjai-reviewer-lite",
         engine_version="engine-free",
         model_tag=None,
+        temperature=None,
         rating=1.0,
         summary=summary,
         stats=stats,
@@ -1100,6 +1191,213 @@ def count_mask_bits(mask_bits: Any) -> int:
         return 0
 
 
+def mask_labels_from_bits(mask_bits: Any) -> list[int]:
+    try:
+        bits = int(mask_bits)
+    except (TypeError, ValueError):
+        return []
+    return [label for label in range(46) if bits & (1 << label)]
+
+
+def softmax(values: list[float], temperature: float) -> list[float]:
+    if not values:
+        return []
+    scaled = [value / temperature for value in values] if temperature != 1.0 else list(values)
+    max_value = max(scaled)
+    exp_values = [math.exp(value - max_value) for value in scaled]
+    total = sum(exp_values)
+    if total <= 0:
+        return [0.0 for _ in values]
+    return [min(max(value / total, 0.0), 1.0) for value in exp_values]
+
+
+def red_five_for_tile(tile: str) -> str | None:
+    base_tile = deaka_tile(tile)
+    if base_tile.endswith("m"):
+        return "5mr"
+    if base_tile.endswith("p"):
+        return "5pr"
+    if base_tile.endswith("s"):
+        return "5sr"
+    return None
+
+
+def can_use_red_five_for_sequence(table_state: ReviewTableState, tile: str, trigger_numbers: set[str]) -> bool:
+    base_tile = deaka_tile(tile)
+    red_tile = red_five_for_tile(base_tile)
+    return red_tile is not None and base_tile[:1] in trigger_numbers and table_state.target_has_tile(red_tile)
+
+
+def build_candidate_action(
+    table_state: ReviewTableState,
+    label: int,
+    last_actor: int | None,
+    last_tile: str | None,
+    *,
+    at_kan_select: bool = False,
+) -> dict[str, Any] | None:
+    actor = table_state.target_actor
+    target = last_actor if last_actor is not None else actor
+
+    if at_kan_select:
+        if not 0 <= label <= 33:
+            return None
+        tile = MJAI_PAI_STRINGS[label]
+        return {"type": "ankan", "actor": actor, "consumed": [tile, tile, tile, tile]}
+
+    if 0 <= label <= 36:
+        tile = MJAI_PAI_STRINGS[label]
+        return {
+            "type": "dahai",
+            "actor": actor,
+            "pai": tile,
+            "tsumogiri": tile_index(last_tile) == label,
+        }
+    if label == 37:
+        return {"type": "reach", "actor": actor}
+    if label in {38, 39, 40}:
+        if last_tile is None:
+            return None
+        base_tile = deaka_tile(last_tile)
+        if label == 38:
+            consumed = [tile_next(base_tile), tile_next(tile_next(base_tile))]
+            if can_use_red_five_for_sequence(table_state, base_tile, {"3", "4"}):
+                consumed = [akaize_tile(tile) for tile in consumed]
+        elif label == 39:
+            consumed = [tile_prev(base_tile), tile_next(base_tile)]
+            if can_use_red_five_for_sequence(table_state, base_tile, {"4", "6"}):
+                consumed = [akaize_tile(tile) for tile in consumed]
+        else:
+            consumed = [tile_prev(tile_prev(base_tile)), tile_prev(base_tile)]
+            if can_use_red_five_for_sequence(table_state, base_tile, {"6", "7"}):
+                consumed = [akaize_tile(tile) for tile in consumed]
+        return {"type": "chi", "actor": actor, "target": target, "pai": last_tile, "consumed": consumed}
+    if label == 41:
+        if last_tile is None:
+            return None
+        base_tile = deaka_tile(last_tile)
+        red_tile = red_five_for_tile(base_tile)
+        if red_tile is not None and base_tile[:1] == "5" and table_state.target_has_tile(red_tile):
+            consumed = [red_tile, base_tile]
+        else:
+            consumed = [base_tile, base_tile]
+        return {"type": "pon", "actor": actor, "target": target, "pai": last_tile, "consumed": consumed}
+    if label == 42:
+        if last_tile is None:
+            return None
+        base_tile = deaka_tile(last_tile)
+        return {"type": "ankan", "actor": actor, "consumed": [last_tile, base_tile, base_tile, base_tile]}
+    if label == 43:
+        return {"type": "hora", "actor": actor, "target": target}
+    if label == 44:
+        return {"type": "ryukyoku"}
+    if label == 45:
+        return {"type": "none"}
+    return None
+
+
+def q_values_by_label(mask_labels: list[int], q_values: list[float]) -> dict[int, float] | None:
+    if len(q_values) < len(mask_labels):
+        return None
+    remaining = list(q_values)
+    values_by_label: dict[int, float] = {}
+    for label in reversed(mask_labels):
+        values_by_label[label] = float(remaining.pop())
+    return values_by_label
+
+
+def build_mortal_candidate_details(
+    table_state: ReviewTableState,
+    expected_action: dict[str, Any],
+    meta: dict[str, Any],
+    last_actor: int | None,
+    last_tile: str | None,
+) -> list[dict[str, Any]]:
+    mask_labels = mask_labels_from_bits(meta.get("mask_bits"))
+    raw_q_values = meta.get("q_values") or []
+    try:
+        q_values = [float(value) for value in raw_q_values]
+    except (TypeError, ValueError):
+        q_values = []
+
+    values_by_label = q_values_by_label(mask_labels, q_values)
+    if values_by_label is None:
+        best_q_value = max(q_values) if q_values else None
+        return [{"expected_action": expected_action, "best_q_value": best_q_value, "prob": 1.0, "engine_meta": meta}]
+
+    details: list[dict[str, Any]] = []
+    for label in mask_labels:
+        action = build_candidate_action(table_state, label, last_actor, last_tile)
+        if action is None:
+            continue
+        details.append(
+            {
+                "expected_action": action,
+                "best_q_value": values_by_label[label],
+                "prob": 0.0,
+                "_label": label,
+                "_label_kind": "general",
+            },
+        )
+
+    kan_select = meta.get("kan_select")
+    if isinstance(kan_select, dict):
+        root_kan_index = next(
+            (
+                index
+                for index, detail in enumerate(details)
+                if detail.get("_label_kind") == "general" and detail.get("_label") == 42
+            ),
+            None,
+        )
+        root_kan_q_value = None
+        if root_kan_index is not None:
+            root_kan_q_value = float(details[root_kan_index]["best_q_value"])
+            details.pop(root_kan_index)
+
+        kan_labels = mask_labels_from_bits(kan_select.get("mask_bits"))
+        raw_kan_q_values = kan_select.get("q_values") or []
+        try:
+            kan_q_values = [float(value) for value in raw_kan_q_values]
+        except (TypeError, ValueError):
+            kan_q_values = []
+        kan_values_by_label = q_values_by_label(kan_labels, kan_q_values)
+        if len(kan_labels) == 1 and root_kan_q_value is not None:
+            kan_values_by_label = {kan_labels[0]: root_kan_q_value}
+
+        if kan_values_by_label:
+            for label in kan_labels:
+                action = build_candidate_action(table_state, label, last_actor, last_tile, at_kan_select=True)
+                if action is None:
+                    continue
+                details.append(
+                    {
+                        "expected_action": action,
+                        "best_q_value": kan_values_by_label[label],
+                        "prob": 0.0,
+                        "_label": label,
+                        "_label_kind": "kan_select",
+                    },
+                )
+
+    if not details:
+        best_q_value = max(q_values) if q_values else None
+        return [{"expected_action": expected_action, "best_q_value": best_q_value, "prob": 1.0, "engine_meta": meta}]
+
+    probabilities = softmax([float(detail["best_q_value"]) for detail in details], MORTAL_REVIEW_TEMPERATURE)
+    for detail, probability in zip(details, probabilities):
+        detail["prob"] = probability
+
+    details.sort(key=lambda detail: float(detail["best_q_value"]), reverse=True)
+    details = [detail for detail in details if float(detail.get("prob") or 0.0) > MORTAL_CANDIDATE_PROB_THRESHOLD]
+    for index, detail in enumerate(details):
+        detail.pop("_label", None)
+        detail.pop("_label_kind", None)
+        if index == 0:
+            detail["engine_meta"] = meta
+    return details
+
+
 def classify_entry_tags(decision_type: str, shanten: int | None, defense_context: bool) -> list[str]:
     tags: list[str] = []
     if decision_type == "riichi":
@@ -1199,9 +1497,13 @@ def build_review(
             continue
         is_match = action_matches(expected_action, actual_action)
         decision_type = DECISION_TYPE_MAP.get(expected_action.get("type"), "other")
-        q_values = meta.get("q_values", []) or []
-        best_q_value = float(max(q_values)) if q_values else None
-        q_spread = float(max(q_values) - min(q_values)) if len(q_values) >= 2 else 0.0
+        details = build_mortal_candidate_details(table_state, expected_action, meta, last_actor, last_tile)
+        detail_q_values = [
+            float(detail["best_q_value"])
+            for detail in details
+            if isinstance(detail.get("best_q_value"), (int, float))
+        ]
+        q_spread = float(max(detail_q_values) - min(detail_q_values)) if len(detail_q_values) >= 2 else 0.0
         shanten = meta.get("shanten")
         defense_context = any(other_actor != target_actor for other_actor in riichi_actors)
         tags = classify_entry_tags(decision_type, shanten, defense_context)
@@ -1231,14 +1533,7 @@ def build_review(
                 delta_score=None if is_match else round(q_spread, 4),
                 shanten=shanten,
                 at_furiten=meta.get("at_furiten"),
-                details=[
-                    {
-                        "expected_action": expected_action,
-                        "best_q_value": best_q_value,
-                        "prob": 1.0,
-                        "engine_meta": meta,
-                    }
-                ],
+                details=details,
                 state_snapshot=table_state.snapshot(event),
                 tags=tags,
             ),
@@ -1290,6 +1585,7 @@ def build_review(
             "efficiency": sum(1 for entry in entries if not entry.is_match and "efficiency" in entry.tags),
             "attack": sum(1 for entry in entries if not entry.is_match and "attack" in entry.tags),
         },
+        "temperature": MORTAL_REVIEW_TEMPERATURE,
     }
     raw_result = {
         "summary": summary,
@@ -1321,6 +1617,7 @@ def build_review(
             "name": "mortal",
             "version": "phase1-mvp",
             "model_tag": extra_data.get("model_tag"),
+            "temperature": MORTAL_REVIEW_TEMPERATURE,
         },
     }
 
@@ -1329,6 +1626,7 @@ def build_review(
         engine_name="mortal",
         engine_version="phase1-mvp",
         model_tag=extra_data.get("model_tag"),
+        temperature=MORTAL_REVIEW_TEMPERATURE,
         rating=rating,
         summary=summary,
         stats=stats,
