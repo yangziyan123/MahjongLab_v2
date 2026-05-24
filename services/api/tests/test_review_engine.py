@@ -263,7 +263,45 @@ class PlayRecorderTests(unittest.TestCase):
         start_kyoku = events[1]
         self.assertEqual(start_kyoku["dora_marker"], "9s")
         self.assertEqual(start_kyoku["scores"], [25000, 25000, 25000, 25000])
-        self.assertEqual([len(hand) for hand in start_kyoku["tehais"]], [13, 13, 13, 13])
+        self.assertEqual([len(hand) for hand in start_kyoku["tehais"]], [13, 13, 13, 14])
+
+        normalized_events = normalize_internal_match_events_for_mjai(events)
+        normalized_start_kyoku = normalized_events[1]
+        self.assertEqual([len(hand) for hand in normalized_start_kyoku["tehais"]], [13, 13, 13, 13])
+        self.assertEqual(normalized_events[2], {"type": "tsumo", "actor": 3, "pai": "1s"})
+
+    def test_addkan_conversion_emits_single_valid_kakan(self) -> None:
+        class TestLauncher(MahjongAiLauncher):
+            def _update_match(self, match_id: str, status: str, result: dict | None = None) -> None:
+                return None
+
+            def _update_match_source(self, match_id: str, updates: dict) -> None:
+                return None
+
+        launcher = TestLauncher(SimpleNamespace())
+        recorder = MatchRecorder(
+            match_id="match-1",
+            username="User1",
+            host="127.0.0.1",
+            port=0,
+            stop_event=SimpleNamespace(),
+            started=True,
+        )
+
+        addkan_events = launcher._convert_protocol_event(
+            recorder,
+            {"event": "addkan", "action": {"who": 1, "from_who": 1, "pattern": [2, 5, 23]}},
+        )
+        final_kan_events = launcher._convert_protocol_event(
+            recorder,
+            {"event": "kan", "action": {"who": 1, "from_who": 1, "pattern": [2, 5, 23]}},
+        )
+
+        self.assertEqual(
+            addkan_events,
+            [{"type": "kakan", "actor": 1, "pai": "6m", "consumed": ["6m", "6m", "6m"]}],
+        )
+        self.assertEqual(final_kan_events, [])
 
     def test_internal_match_normalization_adds_missing_terminal_deltas(self) -> None:
         events = normalize_internal_match_events_for_mjai(
@@ -276,6 +314,51 @@ class PlayRecorderTests(unittest.TestCase):
 
         self.assertEqual(events[1]["deltas"], [0, 0, 0, 0])
         self.assertEqual(events[2]["deltas"], [0, 0, 0, 0])
+
+    def test_internal_match_normalization_repairs_missing_dealer_initial_draw_for_ankan(self) -> None:
+        events = normalize_internal_match_events_for_mjai(
+            [
+                {"type": "start_game"},
+                {
+                    "type": "start_kyoku",
+                    "bakaze": "E",
+                    "kyoku": 1,
+                    "honba": 0,
+                    "kyotaku": 0,
+                    "oya": 0,
+                    "scores": [25000, 25000, 25000, 25000],
+                    "dora_marker": "2s",
+                    "tehais": [
+                        ["8m", "1m", "2m", "3m", "4m", "5m", "6m", "7m", "9m", "1p", "2p", "3p", "4p"],
+                        ["?"] * 13,
+                        ["?"] * 13,
+                        ["?"] * 13,
+                    ],
+                },
+                {"type": "dahai", "actor": 0, "pai": "1m", "tsumogiri": False},
+                {"type": "tsumo", "actor": 0, "pai": "8m"},
+                {"type": "dahai", "actor": 0, "pai": "2m", "tsumogiri": False},
+                {"type": "tsumo", "actor": 0, "pai": "8m"},
+                {"type": "ankan", "actor": 0, "target": 0, "pai": "?", "consumed": ["8m", "8m", "8m", "8m"]},
+            ],
+        )
+
+        self.assertEqual(events[2], {"type": "tsumo", "actor": 0, "pai": "8m"})
+        self.assertEqual(events[-1], {"type": "ankan", "actor": 0, "consumed": ["8m", "8m", "8m", "8m"]})
+
+    def test_internal_match_normalization_repairs_legacy_kakan_shape(self) -> None:
+        events = normalize_internal_match_events_for_mjai(
+            [
+                {"type": "start_kyoku", "tehais": [["?"] * 13, ["?"] * 13, ["?"] * 13, ["?"] * 13]},
+                {"type": "kakan", "actor": 1, "target": 1, "pai": "?", "consumed": ["6m"]},
+                {"type": "kakan", "actor": 1, "target": 1, "pai": "?", "consumed": []},
+            ],
+        )
+
+        self.assertEqual(
+            [event for event in events if event.get("type") == "kakan"],
+            [{"type": "kakan", "actor": 1, "pai": "6m", "consumed": ["6m", "6m", "6m"]}],
+        )
 
     def test_reaction_window_does_not_match_future_discard(self) -> None:
         events = [
@@ -343,6 +426,7 @@ class PlayReviewEndpointTests(unittest.TestCase):
                 db.commit()
                 still_same_snapshot_job = main_app.create_play_match_review(match.id, db)
                 self.assertEqual(still_same_snapshot_job.id, job.id)
+                self.assertEqual(db.get(Match, match.id).status, "round_finished")
 
                 db.add(MatchEvent(match_id=match.id, seq=4, event_type="end_kyoku", payload_json={"type": "end_kyoku"}))
                 db.commit()
@@ -352,6 +436,79 @@ class PlayReviewEndpointTests(unittest.TestCase):
                 self.assertEqual(next_created_job.source_payload["event_limit"], 5)
             finally:
                 main_app.enqueue_review_job = old_enqueue
+                db.close()
+                engine.dispose()
+
+    def test_list_play_matches_returns_serialized_training_history(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+            Base.metadata.create_all(bind=engine)
+            TestingSession = sessionmaker(bind=engine)
+            db = TestingSession()
+            try:
+                user = User(display_name="Tester")
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+                match = Match(
+                    user_id=user.id,
+                    status="completed",
+                    match_type="hanchan",
+                    source_json={"username": "User1", "ai_level": "normal", "target_actor": 0},
+                    result_json={"score": [[0, 320], [1, 250], [2, 220], [3, 210]]},
+                )
+                db.add(match)
+                db.commit()
+                db.refresh(match)
+                db.add_all(
+                    [
+                        MatchEvent(match_id=match.id, seq=0, event_type="start_game", payload_json={"type": "start_game"}),
+                        MatchEvent(match_id=match.id, seq=1, event_type="end_kyoku", payload_json={"type": "end_kyoku"}),
+                        ReviewJob(
+                            user_id=user.id,
+                            match_id=match.id,
+                            status="completed",
+                            source_type="internal_match",
+                            source_payload={"event_limit": 2},
+                            options_json={},
+                            attempt_count=1,
+                        ),
+                    ],
+                )
+                db.commit()
+
+                page = main_app.list_play_matches(q=None, status_filter=None, page=1, page_size=10, db=db)
+
+                self.assertEqual(page.total, 1)
+                self.assertEqual(page.items[0].id, match.id)
+                self.assertEqual(page.items[0].match_type, "hanchan")
+                self.assertEqual(page.items[0].event_count, 2)
+                self.assertEqual(page.items[0].completed_kyoku_count, 1)
+                self.assertEqual(page.items[0].latest_review_job.status, "completed")
+
+                running_match = Match(
+                    user_id=user.id,
+                    status="running",
+                    match_type="hanchan",
+                    source_json={"username": "User1", "ai_level": "normal", "target_actor": 0},
+                )
+                db.add(running_match)
+                db.commit()
+                db.refresh(running_match)
+                db.add(MatchEvent(match_id=running_match.id, seq=0, event_type="end_kyoku", payload_json={"type": "end_kyoku"}))
+                db.commit()
+
+                round_finished_page = main_app.list_play_matches(
+                    q=None,
+                    status_filter="round_finished",
+                    page=1,
+                    page_size=10,
+                    db=db,
+                )
+                self.assertEqual(round_finished_page.total, 1)
+                self.assertEqual(round_finished_page.items[0].id, running_match.id)
+            finally:
                 db.close()
                 engine.dispose()
 

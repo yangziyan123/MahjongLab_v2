@@ -1,55 +1,21 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Download, FileSearch, LoaderCircle } from "lucide-react";
+import { ArrowLeft, Download, FileSearch, History, LoaderCircle, PlayCircle, Trophy } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { ApiError, getPlayMatch, getPlayMatchExportUrl, startPlayMatchReview } from "../../lib/api";
+import { formatDateTime } from "../../lib/format";
+import {
+  formatMatchStatus,
+  formatMatchType,
+  formatReviewJobStatus,
+  formatSignedPoints,
+  getPlayerScoreRow,
+  getPlayScoreRows,
+} from "../../lib/play";
+import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import type { ReviewJobStatus } from "../../lib/types";
-
-function formatReviewJobStatus(status: ReviewJobStatus) {
-  const labels: Record<ReviewJobStatus, string> = {
-    created: "已创建",
-    queued: "排队中",
-    parsing: "解析中",
-    analyzing: "分析中",
-    completed: "已完成",
-    failed: "失败",
-    cancelled: "已取消",
-  };
-  return labels[status] ?? status;
-}
-
-function formatScore(score: unknown) {
-  if (!Array.isArray(score)) {
-    return "";
-  }
-  return score
-    .map((item, index) => {
-      if (Array.isArray(item) && item.length >= 2) {
-        const actor = Number(item[0]);
-        const rawScore = Number(item[1]);
-        const displayScore = Number.isFinite(rawScore) ? rawScore * 100 : item[1];
-        return `${index + 1}. ${Number.isFinite(actor) ? `${actor}号位` : "玩家"} ${displayScore}`;
-      }
-      if (typeof item === "number") {
-        return `${index}号位 ${item}`;
-      }
-      return String(item);
-    })
-    .join(" / ");
-}
-
-function formatMatchStatus(status: string) {
-  const labels: Record<string, string> = {
-    created: "已创建",
-    running: "对局中",
-    round_finished: "小局已结束",
-    completed: "已完成",
-    failed: "失败",
-  };
-  return labels[status] ?? status;
-}
 
 export function PlayResult() {
   const { sessionId: matchId = "" } = useParams();
@@ -120,7 +86,8 @@ export function PlayResult() {
   }
 
   const match = matchQuery.data;
-  const finalScoreText = formatScore(match.result?.score);
+  const scoreRows = getPlayScoreRows(match);
+  const playerRow = getPlayerScoreRow(match);
   const latestReviewJob = match.latest_review_job;
   const latestReviewJobForCurrentSnapshot =
     latestReviewJob?.event_count === match.reviewable_event_count ? latestReviewJob : null;
@@ -156,79 +123,149 @@ export function PlayResult() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="border-b bg-white shadow-sm">
-        <div className="container mx-auto px-4 py-4">
-          <Button asChild variant="ghost" size="sm">
+        <div className="container mx-auto flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center">
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/play/history">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                返回历史记录
+              </Link>
+            </Button>
+            <h1 className="ml-4 text-2xl font-bold text-slate-900">对局结算</h1>
+          </div>
+          <Button asChild>
             <Link to="/play/config">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              返回入口
+              <PlayCircle className="mr-2 h-4 w-4" />
+              新建对局
             </Link>
           </Button>
         </div>
       </header>
 
-      <main className="container mx-auto max-w-4xl space-y-6 px-4 py-8">
-        <Card>
-          <CardHeader>
-            <CardTitle>对局已结束</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm text-slate-700">
-            <div>对局 ID：{match.id}</div>
-            <div>状态：{formatMatchStatus(match.status)}</div>
-            <div>记录事件：{match.event_count}</div>
-            <div>可复盘事件：{match.reviewable_event_count}</div>
-            <div>已结算小局：{match.completed_kyoku_count}</div>
-            {match.target_player_label ? (
-              <div>
-                复盘对象：{match.target_player_label}
-                {typeof match.target_actor === "number" ? `（${match.target_actor}号位）` : null}
+      <main className="container mx-auto max-w-6xl space-y-6 px-4 py-8">
+        <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-slate-100">
+                <Trophy className="h-7 w-7 text-slate-800" />
               </div>
-            ) : null}
-            {finalScoreText ? <div>最终分数：{finalScoreText}</div> : null}
-          </CardContent>
-        </Card>
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardContent className="pt-6">
-              <h3 className="mb-2 font-bold text-slate-900">转入 AI 复盘</h3>
-              <p className="mb-4 text-sm text-slate-600">
-                使用本局记录到的真实玩家座位，将对局事件直接交给复盘引擎。
-              </p>
-              {latestReviewJobForCurrentSnapshot ? (
-                <div className="mb-3 rounded-md bg-slate-100 px-3 py-2 text-sm text-slate-700">
-                  当前进度复盘任务：{formatReviewJobStatus(latestReviewJobForCurrentSnapshot.status)}
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-2xl font-bold text-slate-900">
+                    {playerRow?.rank ? `第 ${playerRow.rank} 位` : "对局已记录"}
+                  </h2>
+                  <Badge variant={match.status === "completed" ? "default" : "secondary"}>
+                    {formatMatchStatus(match.status)}
+                  </Badge>
                 </div>
-              ) : null}
-              {latestReviewJob && !latestReviewJobForCurrentSnapshot ? (
-                <div className="mb-3 text-sm text-slate-600">
-                  已有较早进度的复盘任务，当前已结算小局有新增内容，可以重新创建复盘。
+                <div className="mt-2 text-sm text-slate-500">{formatMatchType(match.match_type)}</div>
+                <div className="mt-1 text-sm text-slate-500">完成时间：{formatDateTime(match.updated_at)}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <div className="rounded-lg bg-slate-50 px-4 py-3 text-center">
+                <div className="text-xl font-bold text-slate-900">{playerRow?.score?.toLocaleString() ?? "-"}</div>
+                <div className="text-xs text-slate-500">最终点数</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-4 py-3 text-center">
+                <div className={playerRow?.delta && playerRow.delta < 0 ? "text-xl font-bold text-rose-600" : "text-xl font-bold text-emerald-700"}>
+                  {formatSignedPoints(playerRow?.delta)}
                 </div>
-              ) : null}
-              {!canStartReview && !latestReviewJobForCurrentSnapshot ? (
-                <div className="mb-3 text-sm text-amber-700">至少完成一个小局结算后才能开始复盘。</div>
-              ) : null}
-              {reviewError ? <div className="mb-3 text-sm text-red-600">{reviewError}</div> : null}
-              <Button className="w-full" onClick={handleStartReview} disabled={reviewDisabled}>
-                {reviewMutation.isPending ? (
-                  <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <FileSearch className="mr-2 h-4 w-4" />
-                )}
-                {reviewButtonLabel}
-              </Button>
-            </CardContent>
-          </Card>
+                <div className="text-xs text-slate-500">点数变化</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 px-4 py-3 text-center">
+                <div className="text-xl font-bold text-slate-900">{match.completed_kyoku_count}</div>
+                <div className="text-xs text-slate-500">已结算小局</div>
+              </div>
+            </div>
+          </div>
+        </section>
 
-          <Card>
-            <CardContent className="pt-6">
-              <h3 className="mb-2 font-bold text-slate-900">生成对局文件</h3>
-              <p className="mb-4 text-sm text-slate-600">导出本局事件为 JSONL 文件，用于留存或手动导入。</p>
-              <Button variant="outline" className="w-full" onClick={handleExport}>
-                <Download className="mr-2 h-4 w-4" />
-                导出 JSONL
-              </Button>
-            </CardContent>
-          </Card>
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>最终排名</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {scoreRows.map((row) => (
+                  <div
+                    key={row.actor}
+                    className={row.isPlayer
+                      ? "rounded-lg border border-blue-200 bg-blue-50 p-4"
+                      : "rounded-lg border border-slate-200 bg-white p-4"}
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 font-bold text-slate-700">
+                          {row.rank ?? row.actor + 1}
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2 font-semibold text-slate-900">
+                            {row.name}
+                            {row.isPlayer ? <Badge>你</Badge> : row.isAi ? <Badge variant="secondary">AI</Badge> : null}
+                          </div>
+                          <div className="mt-1 text-sm text-slate-500">{row.score?.toLocaleString() ?? "-"} 点</div>
+                        </div>
+                      </div>
+                      <div className={row.delta && row.delta < 0 ? "text-lg font-bold text-rose-600" : "text-lg font-bold text-emerald-700"}>
+                        {formatSignedPoints(row.delta)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+
+          <aside className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>后续动作</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {latestReviewJobForCurrentSnapshot ? (
+                  <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                    当前复盘任务：{formatReviewJobStatus(latestReviewJobForCurrentSnapshot.status)}
+                  </div>
+                ) : null}
+                {latestReviewJob && !latestReviewJobForCurrentSnapshot ? (
+                  <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                    当前对局记录已新增内容，可以重新创建复盘。
+                  </div>
+                ) : null}
+                {!canStartReview && !latestReviewJobForCurrentSnapshot ? (
+                  <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+                    至少完成一个小局结算后才能开始复盘。
+                  </div>
+                ) : null}
+                {reviewError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>复盘任务失败</AlertTitle>
+                    <AlertDescription>{reviewError}</AlertDescription>
+                  </Alert>
+                ) : null}
+                <Button className="w-full" onClick={handleStartReview} disabled={reviewDisabled}>
+                  {reviewMutation.isPending ? (
+                    <LoaderCircle className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileSearch className="mr-2 h-4 w-4" />
+                  )}
+                  {reviewButtonLabel}
+                </Button>
+                <Button variant="outline" className="w-full" onClick={handleExport}>
+                  <Download className="mr-2 h-4 w-4" />
+                  导出 JSONL
+                </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to="/play/history">
+                    <History className="mr-2 h-4 w-4" />
+                    查看历史训练
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          </aside>
         </div>
       </main>
     </div>

@@ -618,9 +618,128 @@ def normalize_start_kyoku_event_for_mjai(event: dict[str, Any]) -> tuple[dict[st
     return normalized, synthetic_events
 
 
+def tile_family_count(tiles: list[str], tile: str) -> int:
+    return sum(1 for candidate in tiles if same_tile_family(candidate, tile))
+
+
+def remove_tile_family_once(tiles: list[str], tile: str | None) -> bool:
+    if not tile:
+        return True
+    for index, candidate in enumerate(tiles):
+        if same_tile_family(candidate, tile):
+            tiles.pop(index)
+            return True
+    if "?" in tiles:
+        tiles.remove("?")
+        return True
+    return False
+
+
+def infer_missing_initial_dealer_tile(events: list[dict[str, Any]], start_index: int, end_index: int) -> str | None:
+    start_event = events[start_index]
+    actor = normalize_actor(start_event.get("oya")) or 0
+    tehais = start_event.get("tehais")
+    if not isinstance(tehais, list) or actor >= len(tehais):
+        return None
+
+    hand = normalize_tile_list(tehais[actor])
+    if len(hand) != 13 or any(tile == "?" for tile in hand):
+        return None
+
+    for event in events[start_index + 1 : end_index]:
+        if normalize_actor(event.get("actor")) != actor:
+            continue
+
+        event_type = event.get("type")
+        tile = event.get("pai") if isinstance(event.get("pai"), str) else None
+        if event_type == "tsumo":
+            hand.append(tile or "?")
+            continue
+        if event_type == "dahai":
+            remove_tile_family_once(hand, tile)
+            continue
+        if event_type in {"chi", "pon", "daiminkan"}:
+            for consumed_tile in normalize_tile_list(event.get("consumed")):
+                remove_tile_family_once(hand, consumed_tile)
+            continue
+        if event_type == "kakan":
+            remove_tile_family_once(hand, tile)
+            continue
+        if event_type != "ankan":
+            continue
+
+        consumed = normalize_tile_list(event.get("consumed"))
+        if not consumed:
+            continue
+        missing = sum(1 for consumed_tile in consumed if not remove_tile_family_once(hand, consumed_tile))
+        if missing == 1 and tile_family_count(consumed, consumed[0]) == len(consumed):
+            return consumed[0]
+        return None
+
+    return None
+
+
+def repair_internal_start_hands(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    repaired_events = [dict(event) for event in events]
+    index = 0
+    while index < len(repaired_events):
+        event = repaired_events[index]
+        if event.get("type") != "start_kyoku":
+            index += 1
+            continue
+
+        end_index = index + 1
+        while end_index < len(repaired_events) and repaired_events[end_index].get("type") not in {
+            "start_kyoku",
+            "end_game",
+        }:
+            end_index += 1
+
+        missing_tile = infer_missing_initial_dealer_tile(repaired_events, index, end_index)
+        if missing_tile is not None:
+            tehais = event.get("tehais")
+            actor = normalize_actor(event.get("oya")) or 0
+            if isinstance(tehais, list) and actor < len(tehais) and isinstance(tehais[actor], list):
+                fixed_tehais = [list(normalize_tile_list(hand)) if isinstance(hand, list) else [] for hand in tehais]
+                fixed_tehais[actor].append(missing_tile)
+                repaired_events[index] = {**event, "tehais": fixed_tehais}
+
+        index = end_index
+    return repaired_events
+
+
+def normalize_internal_kan_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    if event.get("type") == "ankan":
+        normalized = dict(event)
+        normalized.pop("pai", None)
+        normalized.pop("target", None)
+        return normalized
+
+    if event.get("type") != "kakan":
+        return event
+
+    normalized = dict(event)
+    consumed = normalize_tile_list(normalized.get("consumed"))
+    tile = normalized.get("pai") if isinstance(normalized.get("pai"), str) and normalized.get("pai") != "?" else None
+    if tile is None and consumed:
+        tile = consumed[0]
+    if tile is None:
+        return None
+
+    base_tile = deaka_tile(tile)
+    normalized["pai"] = tile
+    normalized["consumed"] = consumed if len(consumed) == 3 else [base_tile, base_tile, base_tile]
+    normalized.pop("target", None)
+    return normalized
+
+
 def normalize_internal_match_events_for_mjai(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized_events: list[dict[str, Any]] = []
+    events = repair_internal_start_hands(events)
     for index, event in enumerate(events):
+        event = normalize_internal_kan_event(event)
+        if event is None:
+            continue
         if event.get("type") != "start_kyoku":
             if event.get("type") in {"hora", "ryukyoku"} and event.get("deltas") is None:
                 normalized_events.append({**event, "deltas": [0, 0, 0, 0]})
@@ -854,7 +973,7 @@ class ReviewTableState:
 
         if event_type == "kakan":
             consumed = normalize_tile_list(event.get("consumed")) or ([tile] if tile else [])
-            remove_tiles(self.hands[actor], consumed)
+            remove_tile_once(self.hands[actor], tile)
             self.drawn_tiles[actor] = None
             self.melds[actor].append(
                 {

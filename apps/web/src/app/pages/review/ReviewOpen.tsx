@@ -122,7 +122,7 @@ export function ReviewOpen() {
                   <FileText className="h-6 w-6 text-slate-700" />
                 </div>
                 <CardTitle>直接查看报告</CardTitle>
-                <CardDescription>查看摘要、筛选器、候选动作、错题库标记和完整分析信息。</CardDescription>
+                <CardDescription>查看摘要、筛选器、候选动作和完整分析信息。</CardDescription>
               </CardHeader>
               <CardContent>
                 <Button asChild className="w-full" variant="outline" size="lg">

@@ -35,6 +35,8 @@ type TableSnapshot = {
   last_tile?: string | null;
 };
 
+type ReviewMahjongTableEntry = Pick<ReviewEntry, "state_snapshot" | "tiles_left" | "junme" | "is_match">;
+
 const WIND_LABELS: Record<string, string> = {
   E: "东",
   S: "南",
@@ -52,7 +54,7 @@ const HONOR_LABELS: Record<string, string> = {
   C: "中",
 };
 
-function getTableSnapshot(entry: ReviewEntry): TableSnapshot | null {
+function getTableSnapshot(entry: ReviewMahjongTableEntry): TableSnapshot | null {
   const table = entry.state_snapshot?.table;
   if (!table || typeof table !== "object") {
     return null;
@@ -248,7 +250,7 @@ export function ReviewMahjongTable({
   entry,
   targetPlayerLabel,
 }: {
-  entry: ReviewEntry;
+  entry: ReviewMahjongTableEntry;
   targetPlayerLabel?: string | null;
 }) {
   const table = getTableSnapshot(entry);

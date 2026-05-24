@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { FileSearch, History, PlayCircle, Target } from "lucide-react";
+import { FileSearch, History, PlayCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import { listReviews } from "../lib/api";
@@ -41,6 +41,12 @@ export function Home() {
                     进入对战
                   </Link>
                 </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to="/play/history">
+                    <History className="mr-2 h-4 w-4" />
+                    查看历史训练
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
 
@@ -62,12 +68,6 @@ export function Home() {
                   <Link to="/review/history">
                     <History className="mr-2 h-4 w-4" />
                     查看历史复盘
-                  </Link>
-                </Button>
-                <Button asChild variant="outline" className="w-full">
-                  <Link to="/training/mistakes">
-                    <Target className="mr-2 h-4 w-4" />
-                    进入错题库
                   </Link>
                 </Button>
               </CardContent>

@@ -2,8 +2,7 @@ import type {
   CreatePlaySessionRequest,
   CreateReviewJobRequest,
   DashboardSummary,
-  MistakeItem,
-  PaginatedMistakeItems,
+  PaginatedPlayMatches,
   PlayMatch,
   PlaySession,
   PaginatedReviewEntries,
@@ -18,7 +17,6 @@ import type {
 } from "./types";
 
 const REVIEW_ENTRY_PAGE_SIZE = 200;
-const MISTAKE_PAGE_SIZE = 100;
 
 export class ApiError extends Error {
   status: number;
@@ -89,6 +87,15 @@ export function createPlaySession(payload: CreatePlaySessionRequest) {
 
 export function getPlayMatch(matchId: string) {
   return apiRequest<PlayMatch>(`/api/play/matches/${matchId}`);
+}
+
+export function listPlayMatches(params: {
+  q?: string;
+  status?: string;
+  page?: number;
+  page_size?: number;
+}) {
+  return apiRequest<PaginatedPlayMatches>(`/api/play/matches${buildQuery(params)}`);
 }
 
 export function startPlayMatchReview(matchId: string) {
@@ -194,59 +201,6 @@ export async function listAllReviewEntries(params: {
 
 export function deleteReview(reviewId: string) {
   return apiRequest<void>(`/api/reviews/${reviewId}`, {
-    method: "DELETE",
-  });
-}
-
-export function createMistakeItem(reviewId: string, payload: {
-  review_entry_id: number;
-  note?: string | null;
-  tags?: string[];
-}) {
-  return apiRequest<MistakeItem>(`/api/reviews/${reviewId}/mistakes`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export function listMistakes(params: {
-  q?: string;
-  review_id?: string;
-  category?: string;
-  decision_type?: string;
-  page?: number;
-  page_size?: number;
-}) {
-  return apiRequest<PaginatedMistakeItems>(`/api/mistakes${buildQuery(params)}`);
-}
-
-export async function listAllMistakes(params: {
-  q?: string;
-  review_id?: string;
-  category?: string;
-  decision_type?: string;
-}) {
-  const items: MistakeItem[] = [];
-  let page = 1;
-
-  while (true) {
-    const response = await listMistakes({
-      ...params,
-      page,
-      page_size: MISTAKE_PAGE_SIZE,
-    });
-    items.push(...response.items);
-
-    if (items.length >= response.total || response.items.length === 0) {
-      return items;
-    }
-
-    page += 1;
-  }
-}
-
-export function deleteMistakeItem(mistakeId: string) {
-  return apiRequest<void>(`/api/mistakes/${mistakeId}`, {
     method: "DELETE",
   });
 }

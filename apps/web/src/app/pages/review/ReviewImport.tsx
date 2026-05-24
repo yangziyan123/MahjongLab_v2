@@ -247,7 +247,7 @@ export function ReviewImport() {
           </Link>
           <div className="ml-4">
             <h1 className="text-2xl font-bold text-slate-900">AI 复盘</h1>
-            <p className="text-sm text-slate-500">导入牌谱，生成可筛选、可回放、可加入错题库的复盘结果。</p>
+            <p className="text-sm text-slate-500">导入牌谱，生成可筛选、可回放的复盘结果。</p>
           </div>
         </div>
       </header>

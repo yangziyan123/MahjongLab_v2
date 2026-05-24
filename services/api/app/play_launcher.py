@@ -55,6 +55,24 @@ def target_actor_from_agents(agents: object, username: str) -> int | None:
     return None
 
 
+def normalize_ai_opponents(ai_opponents: object) -> list[dict]:
+    if not isinstance(ai_opponents, list):
+        return []
+    normalized: list[dict] = []
+    for opponent in ai_opponents[:3]:
+        if not isinstance(opponent, dict):
+            continue
+        style = opponent.get("style")
+        difficulty = opponent.get("difficulty")
+        normalized.append(
+            {
+                "style": style if style in {"balanced", "attack", "defense", "efficiency"} else "balanced",
+                "difficulty": difficulty if difficulty in {"normal", "hard"} else "normal",
+            },
+        )
+    return normalized
+
+
 def summarize_agents(agents: object) -> list[dict]:
     if not isinstance(agents, list):
         return []
@@ -79,6 +97,15 @@ def normalize_start_hand(tiles: object) -> list[str]:
     normalized = [str(tile) for tile in tiles if tile is not None]
     if len(normalized) >= 13:
         return normalized[:13]
+    return normalized + (["?"] * (13 - len(normalized)))
+
+
+def normalize_observed_start_hand(tiles: object) -> list[str]:
+    if not isinstance(tiles, list):
+        return ["?"] * 13
+    normalized = [str(tile) for tile in tiles if tile is not None]
+    if len(normalized) >= 13:
+        return normalized[:14]
     return normalized + (["?"] * (13 - len(normalized)))
 
 
@@ -317,6 +344,17 @@ class MahjongAiLauncher:
         honors = {27: "E", 28: "S", 29: "W", 30: "N", 31: "P", 32: "F", 33: "C"}
         return honors.get(tile, "?")
 
+    def _tile_kind_to_mjai(self, tile_kind: int | None) -> str:
+        if tile_kind is None:
+            return "?"
+        return self._tile_to_mjai(tile_kind * 4)
+
+    def _kan_consumed_tiles(self, tile_kind: int, excluded_tile_id: int | None = None) -> list[str]:
+        tile_ids = [tile_kind * 4 + index for index in range(4)]
+        if excluded_tile_id in tile_ids:
+            tile_ids.remove(excluded_tile_id)
+        return [self._tile_to_mjai(tile_id) for tile_id in tile_ids[:3]]
+
     def _append_match_event(self, match_id: str, event: dict) -> None:
         with SessionLocal() as db:
             match_event = MatchEvent(
@@ -412,7 +450,7 @@ class MahjongAiLauncher:
             while len(tehais) < 4:
                 tehais.append(["?"] * 13)
             if isinstance(observed_actor, int) and 0 <= observed_actor <= 3 and isinstance(self_info, dict):
-                tehais[observed_actor] = normalize_start_hand(
+                tehais[observed_actor] = normalize_observed_start_hand(
                     [self._tile_to_mjai(tile_id) for tile_id in self_info.get("tiles", [])],
                 )
             scores = [int(agent.get("score", 250) * 100) for agent in agents[:4] if isinstance(agent, dict)]
@@ -473,36 +511,55 @@ class MahjongAiLauncher:
             )
             return converted
 
-        if event_name in {"kan", "addkan"}:
+        if event_name == "addkan":
             action = message.get("action", {})
             pattern = action.get("pattern", [])
-            if event_name == "addkan":
-                kan_type = "kakan"
-                add_tile = pattern[2] if isinstance(pattern, list) and len(pattern) >= 3 else None
-                consumed = [self._tile_to_mjai(add_tile)] if add_tile is not None else []
-            else:
-                kan_mode = pattern[0] if isinstance(pattern, list) and pattern else 0
-                if kan_mode == 0:
-                    kan_type = "ankan"
-                    base = int(pattern[1]) if len(pattern) > 1 else 0
-                    consumed = [self._tile_to_mjai(base * 4 + i) for i in range(4)]
-                elif kan_mode == 1:
-                    kan_type = "daiminkan"
-                    base = int(pattern[1]) if len(pattern) > 1 else 0
-                    consumed = [self._tile_to_mjai(base * 4 + i) for i in range(3)]
-                else:
-                    kan_type = "kakan"
-                    consumed = []
-
+            if not isinstance(pattern, list) or len(pattern) < 3 or int(pattern[0]) != 2:
+                return converted
+            tile_kind = int(pattern[1])
+            add_tile_id = int(pattern[2])
+            consumed_tile = self._tile_kind_to_mjai(tile_kind)
             converted.append(
                 {
-                    "type": kan_type,
+                    "type": "kakan",
                     "actor": int(action.get("who", 0)),
-                    "target": int(action.get("from_who", action.get("who", 0))),
-                    "pai": self._tile_to_mjai(action.get("kui")),
-                    "consumed": consumed,
+                    "pai": self._tile_to_mjai(add_tile_id),
+                    "consumed": [consumed_tile, consumed_tile, consumed_tile],
                 },
             )
+            return converted
+
+        if event_name == "kan":
+            action = message.get("action", {})
+            pattern = action.get("pattern", [])
+            if not isinstance(pattern, list) or len(pattern) < 2:
+                return converted
+            kan_mode = int(pattern[0])
+            tile_kind = int(pattern[1])
+            if kan_mode == 0:
+                converted.append(
+                    {
+                        "type": "ankan",
+                        "actor": int(action.get("who", 0)),
+                        "consumed": [self._tile_to_mjai(tile_kind * 4 + i) for i in range(4)],
+                    },
+                )
+            elif kan_mode == 1:
+                kui_tile_id = action.get("kui")
+                if not isinstance(kui_tile_id, int) and len(pattern) >= 3:
+                    kui_tile_id = int(pattern[2])
+                converted.append(
+                    {
+                        "type": "daiminkan",
+                        "actor": int(action.get("who", 0)),
+                        "target": int(action.get("from_who", action.get("who", 0))),
+                        "pai": self._tile_to_mjai(kui_tile_id if isinstance(kui_tile_id, int) else None),
+                        "consumed": self._kan_consumed_tiles(
+                            tile_kind,
+                            kui_tile_id if isinstance(kui_tile_id, int) else None,
+                        ),
+                    },
+                )
             return converted
 
         if event_name == "riichi":
@@ -616,7 +673,7 @@ class MahjongAiLauncher:
                         break
 
         finally:
-            if not recorder.ended and joined:
+            if not recorder.ended and joined and not recorder.stop_event.is_set():
                 self._update_match(recorder.match_id, "running")
 
     def _ensure_default_user_id(self, db) -> str:
@@ -629,21 +686,31 @@ class MahjongAiLauncher:
         db.refresh(user)
         return user.id
 
-    def _create_match(self, username: str, ai_level: str) -> Match:
+    def _create_match(self, username: str, ai_level: str, ai_opponents: list[dict] | None = None) -> Match:
         with SessionLocal() as db:
             user_id = self._ensure_default_user_id(db)
             match = Match(
                 user_id=user_id,
                 status="created",
                 match_type="hanchan",
-                source_json={"origin": "mahjong_ai", "username": username, "ai_level": ai_level},
+                source_json={
+                    "origin": "mahjong_ai",
+                    "username": username,
+                    "ai_level": ai_level,
+                    "ai_opponents": normalize_ai_opponents(ai_opponents),
+                },
             )
             db.add(match)
             db.commit()
             db.refresh(match)
             return match
 
-    def ensure_running(self, username: str, ai_level: str = "normal") -> PlaySessionOut:
+    def ensure_running(
+        self,
+        username: str,
+        ai_level: str = "normal",
+        ai_opponents: list[dict] | None = None,
+    ) -> PlaySessionOut:
         username = username.strip()
         if not username:
             raise RuntimeError("username is required")
@@ -656,7 +723,7 @@ class MahjongAiLauncher:
 
         with self._lock:
             self._validate_environment()
-            match = self._create_match(username, ai_level)
+            match = self._create_match(username, ai_level, ai_opponents)
 
             self._stop_managed_processes()
             self._processes = self._build_processes(ai_level)
@@ -727,6 +794,13 @@ class MahjongAiLauncher:
                 services=[self._service_status(proc) for proc in self._processes.values()],
             )
 
+    def finish_active_match_for_review(self, match_id: str) -> None:
+        with self._lock:
+            if self._last_session is None or self._last_session.match_id != match_id:
+                return
+            self._stop_managed_processes()
+            self._last_session = None
+
     def get_match(self, match_id: str) -> PlayMatchOut | None:
         with SessionLocal() as db:
             match = db.get(Match, match_id)
@@ -770,6 +844,7 @@ class MahjongAiLauncher:
             return PlayMatchOut(
                 id=match.id,
                 status=match.status,
+                match_type=match.match_type,
                 source=source,
                 result=match.result_json,
                 event_count=int(event_count),

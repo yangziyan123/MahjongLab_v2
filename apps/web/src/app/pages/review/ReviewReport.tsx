@@ -1,18 +1,15 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowLeft,
   ArrowRightCircle,
-  BookmarkCheck,
-  BookmarkPlus,
   Clock3,
   Layers3,
-  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { createMistakeItem, deleteMistakeItem, getReview, listAllMistakes, listAllReviewEntries } from "../../lib/api";
+import { getReview, listAllReviewEntries } from "../../lib/api";
 import { formatDateTime, formatDecisionType, formatKyokuLabel, formatPlatform } from "../../lib/format";
 import { useReviewReportStore } from "../../store/review-report";
 import type { ReviewEntry } from "../../lib/types";
@@ -84,7 +81,6 @@ function formatTrainingTag(tag: string) {
 export function ReviewReport() {
   const { reportId = "" } = useParams();
   const [searchParams] = useSearchParams();
-  const queryClient = useQueryClient();
   const {
     kyoku,
     deviationLevel,
@@ -129,39 +125,8 @@ export function ReviewReport() {
       }),
     enabled: Boolean(reportId),
   });
-  const mistakeItemsQuery = useQuery({
-    queryKey: ["review-mistakes", reportId],
-    queryFn: () => listAllMistakes({ review_id: reportId }),
-    enabled: Boolean(reportId),
-  });
-
-  const addMistakeMutation = useMutation({
-    mutationFn: (entryId: number) => createMistakeItem(reportId, { review_entry_id: entryId }),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["review-mistakes", reportId] }),
-        queryClient.invalidateQueries({ queryKey: ["mistakes"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
-      ]);
-    },
-  });
-  const removeMistakeMutation = useMutation({
-    mutationFn: (mistakeId: string) => deleteMistakeItem(mistakeId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["review-mistakes", reportId] }),
-        queryClient.invalidateQueries({ queryKey: ["mistakes"] }),
-        queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] }),
-      ]);
-    },
-  });
-
   const allEntries = allEntriesQuery.data ?? [];
   const filteredEntries = filteredEntriesQuery.data ?? [];
-  const mistakeByEntryId = useMemo(
-    () => new Map((mistakeItemsQuery.data ?? []).map((item) => [item.review_entry_id, item])),
-    [mistakeItemsQuery.data],
-  );
 
   useEffect(() => {
     if (filteredEntries.length === 0) {
@@ -179,7 +144,6 @@ export function ReviewReport() {
   }, [filteredEntries, selectedEntryId, setSelectedEntryId]);
 
   const selectedEntry = filteredEntries.find((entry) => entry.id === selectedEntryId) ?? filteredEntries[0] ?? null;
-  const selectedMistakeItem = selectedEntry ? mistakeByEntryId.get(selectedEntry.id) ?? null : null;
 
   const kyokuOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -327,11 +291,6 @@ export function ReviewReport() {
                   逐步复盘
                 </Button>
               </Link>
-              <Link to="/training/mistakes">
-                <Button variant="outline" size="sm">
-                  错题库
-                </Button>
-              </Link>
               <Link to="/review/import">
                 <Button variant="outline" size="sm">
                   新建复盘
@@ -344,14 +303,6 @@ export function ReviewReport() {
 
       <main className="container mx-auto px-4 py-8">
         <div className="mx-auto max-w-7xl space-y-6">
-          {mistakeItemsQuery.isError && (
-            <Card className="border-amber-200 bg-amber-50/80">
-              <CardContent className="flex items-center gap-3 py-4 text-sm text-amber-900">
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                暂时无法读取错题库状态，但复盘条目仍可正常查看。
-              </CardContent>
-            </Card>
-          )}
           <Card className="border-slate-200 bg-white shadow-sm">
             <CardContent className="grid gap-6 p-6 lg:grid-cols-[1.15fr_0.85fr] lg:p-7">
               <div className="space-y-5">
@@ -573,7 +524,6 @@ export function ReviewReport() {
                         <span>{formatKyokuLabel(selectedEntry.kyoku_index, selectedEntry.honba)}</span>
                         <div className="flex items-center gap-2">
                           {getDeviationBadge(selectedEntry)}
-                          {selectedMistakeItem && <Badge variant="secondary">已加入错题库</Badge>}
                         </div>
                       </CardTitle>
                       <CardDescription>
@@ -614,43 +564,6 @@ export function ReviewReport() {
                         </div>
                       )}
 
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          onClick={() => selectedEntry && addMistakeMutation.mutate(selectedEntry.id)}
-                          disabled={
-                            selectedEntry.is_match || Boolean(selectedMistakeItem) || addMistakeMutation.isPending
-                          }
-                        >
-                          {selectedMistakeItem ? (
-                            <>
-                              <BookmarkCheck className="mr-2 h-4 w-4" />
-                              已加入错题库
-                            </>
-                          ) : (
-                            <>
-                              <BookmarkPlus className="mr-2 h-4 w-4" />
-                              加入错题库
-                            </>
-                          )}
-                        </Button>
-                        {selectedMistakeItem && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={() => removeMistakeMutation.mutate(selectedMistakeItem.id)}
-                            disabled={removeMistakeMutation.isPending}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            从错题库移除
-                          </Button>
-                        )}
-                        {selectedEntry.is_match && (
-                          <div className="flex items-center rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">
-                            这手已命中推荐动作，不计入错题库。
-                          </div>
-                        )}
-                      </div>
                     </CardContent>
                   </Card>
 

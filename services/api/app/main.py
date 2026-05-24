@@ -7,21 +7,19 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .jobs import enqueue_review_job
-from .models import Match, MatchEvent, MistakeItem, Review, ReviewEntry, ReviewJob, User
+from .models import Match, MatchEvent, Review, ReviewEntry, ReviewJob, User
 from .play_launcher import MahjongAiLauncher
 from .schemas import (
     CreatePlaySessionRequest,
-    CreateMistakeItemRequest,
     CreateReviewJobRequest,
     DashboardSummary,
-    MistakeItemOut,
-    PaginatedMistakeItems,
+    PaginatedPlayMatches,
     PlayMatchOut,
     PlaySessionOut,
     PaginatedReviewEntries,
@@ -139,6 +137,74 @@ def get_internal_match_review_event_limit(db: Session, match: Match) -> int:
     return int(last_completed_kyoku_seq) + 1
 
 
+def serialize_play_match(db: Session, match: Match) -> PlayMatchOut:
+    event_count = db.scalar(select(func.count(MatchEvent.id)).where(MatchEvent.match_id == match.id)) or 0
+    completed_kyoku_count = (
+        db.scalar(
+            select(func.count(MatchEvent.id)).where(
+                MatchEvent.match_id == match.id,
+                MatchEvent.event_type == "end_kyoku",
+            ),
+        )
+        or 0
+    )
+    last_completed_kyoku_seq = db.scalar(
+        select(func.max(MatchEvent.seq)).where(
+            MatchEvent.match_id == match.id,
+            MatchEvent.event_type == "end_kyoku",
+        ),
+    )
+    reviewable_event_count = int(event_count)
+    if match.status != "completed":
+        reviewable_event_count = int(last_completed_kyoku_seq) + 1 if last_completed_kyoku_seq is not None else 0
+
+    latest_review_job = db.scalar(
+        select(ReviewJob)
+        .where(ReviewJob.match_id == match.id, ReviewJob.source_type == "internal_match")
+        .order_by(ReviewJob.created_at.desc())
+        .limit(1),
+    )
+    latest_review_event_count = None
+    if latest_review_job is not None and isinstance(latest_review_job.source_payload, dict):
+        source_event_limit = latest_review_job.source_payload.get("event_limit")
+        if isinstance(source_event_limit, int):
+            latest_review_event_count = source_event_limit
+
+    source = match.source_json or {}
+    target_actor = source.get("target_actor")
+    if not isinstance(target_actor, int):
+        target_actor = None
+    target_player_label = source.get("target_player_label") or source.get("username")
+
+    return PlayMatchOut(
+        id=match.id,
+        status=match.status,
+        match_type=match.match_type,
+        source=source,
+        result=match.result_json,
+        event_count=int(event_count),
+        reviewable_event_count=reviewable_event_count,
+        completed_kyoku_count=int(completed_kyoku_count),
+        target_actor=target_actor,
+        target_player_label=target_player_label if isinstance(target_player_label, str) else None,
+        latest_review_job=(
+            {
+                "id": latest_review_job.id,
+                "status": latest_review_job.status,
+                "event_count": latest_review_event_count,
+                "review_id": latest_review_job.review_id,
+                "error_message": latest_review_job.error_message,
+                "created_at": latest_review_job.created_at,
+                "updated_at": latest_review_job.updated_at,
+            }
+            if latest_review_job is not None
+            else None
+        ),
+        created_at=match.created_at,
+        updated_at=match.updated_at,
+    )
+
+
 def serialize_review(review: Review) -> ReviewOut:
     return ReviewOut(
         id=review.id,
@@ -189,69 +255,6 @@ def serialize_entry(entry: ReviewEntry) -> ReviewEntryOut:
         created_at=entry.created_at,
     )
 
-
-def derive_mistake_category(tags: list[str], decision_type: str) -> str:
-    priority = ["defense", "riichi_judgment", "call_judgment", "efficiency", "attack"]
-    for candidate in priority:
-        if candidate in tags:
-            return candidate
-
-    if decision_type == "riichi":
-        return "riichi_judgment"
-    if decision_type in {"chi", "pon", "kan"}:
-        return "call_judgment"
-    if decision_type == "discard":
-        return "efficiency"
-    return "other"
-
-
-def build_mistake_snapshot(review: Review, entry: ReviewEntry) -> dict:
-    return {
-        "platform": review.platform,
-        "target_actor": review.target_actor,
-        "target_player_label": review.target_player_label,
-        "entry_seq": entry.seq,
-        "kyoku_index": entry.kyoku_index,
-        "honba": entry.honba,
-        "junme": entry.junme,
-        "decision_type": entry.decision_type,
-        "deviation_level": entry.deviation_level,
-        "actual_action": entry.actual_action_json,
-        "expected_action": entry.expected_action_json or {},
-        "state_snapshot": entry.state_snapshot_json or {},
-    }
-
-
-def serialize_mistake(item: MistakeItem) -> MistakeItemOut:
-    snapshot = item.snapshot_json or {}
-    review = item.review
-    entry = item.review_entry
-
-    target_actor = review.target_actor if review is not None else int(snapshot.get("target_actor", 0))
-    return MistakeItemOut(
-        id=item.id,
-        review_id=item.review_id,
-        review_entry_id=item.review_entry_id,
-        platform=review.platform if review is not None else snapshot.get("platform"),
-        target_actor=target_actor,
-        target_player_label=review.target_player_label if review is not None else snapshot.get("target_player_label"),
-        entry_seq=entry.seq if entry is not None else int(snapshot.get("entry_seq", 0)),
-        kyoku_index=entry.kyoku_index if entry is not None else int(snapshot.get("kyoku_index", 0)),
-        honba=entry.honba if entry is not None else int(snapshot.get("honba", 0)),
-        junme=entry.junme if entry is not None else int(snapshot.get("junme", 0)),
-        decision_type=entry.decision_type if entry is not None else str(snapshot.get("decision_type", "other")),
-        deviation_level=entry.deviation_level if entry is not None else str(snapshot.get("deviation_level", "medium")),
-        category=item.category,
-        note=item.note,
-        tags=item.tags_json or [],
-        actual_action=snapshot.get("actual_action"),
-        expected_action=snapshot.get("expected_action") or {},
-        state_snapshot=snapshot.get("state_snapshot") or {},
-        created_at=item.created_at,
-        updated_at=item.updated_at,
-    )
-
-
 @app.on_event("startup")
 def on_startup() -> None:
     settings.ensure_dirs()
@@ -282,9 +285,52 @@ def get_play_session() -> PlaySessionOut | None:
 @app.post("/api/play/session", response_model=PlaySessionOut, response_model_by_alias=False)
 def create_play_session(payload: CreatePlaySessionRequest) -> PlaySessionOut:
     try:
-        return play_launcher.ensure_running(payload.username, payload.ai_level)
+        return play_launcher.ensure_running(payload.username, payload.ai_level, payload.ai_opponents)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/api/play/matches", response_model=PaginatedPlayMatches, response_model_by_alias=False)
+def list_play_matches(
+    q: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> PaginatedPlayMatches:
+    user = get_or_create_default_user(db)
+    stmt = select(Match).where(Match.user_id == user.id)
+    if status_filter and status_filter != "all":
+        if status_filter == "round_finished":
+            stmt = stmt.where(
+                or_(
+                    Match.status == "round_finished",
+                    and_(
+                        Match.status == "running",
+                        select(func.count(MatchEvent.id))
+                        .where(MatchEvent.match_id == Match.id, MatchEvent.event_type == "end_kyoku")
+                        .correlate(Match)
+                        .scalar_subquery()
+                        > 0,
+                    ),
+                ),
+            )
+        else:
+            stmt = stmt.where(Match.status == status_filter)
+    if q:
+        like = f"%{q}%"
+        stmt = stmt.where(or_(Match.id.ilike(like), cast(Match.source_json, String).ilike(like)))
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    matches = db.scalars(
+        stmt.order_by(Match.created_at.desc()).offset((page - 1) * page_size).limit(page_size),
+    ).all()
+    return PaginatedPlayMatches(
+        items=[serialize_play_match(db, match) for match in matches],
+        page=page,
+        page_size=page_size,
+        total=int(total),
+    )
 
 
 @app.get("/api/play/matches/{match_id}", response_model=PlayMatchOut, response_model_by_alias=False)
@@ -304,6 +350,12 @@ def create_play_match_review(match_id: str, db: Session = Depends(get_db)) -> Re
     event_limit = get_internal_match_review_event_limit(db, match)
     if event_limit <= 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="还没有已结算的小局可复盘")
+
+    if match.status == "running":
+        play_launcher.finish_active_match_for_review(match_id)
+        match.status = "round_finished"
+        db.commit()
+        db.refresh(match)
 
     existing_jobs = db.scalars(
         select(ReviewJob)
@@ -356,12 +408,10 @@ def get_dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummary:
     review_count = db.scalar(select(func.count(Review.id))) or 0
     completed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "completed")) or 0
     failed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "failed")) or 0
-    mistake_count = db.scalar(select(func.count(MistakeItem.id))) or 0
     return DashboardSummary(
         review_count=int(review_count),
         completed_job_count=int(completed_job_count),
         failed_job_count=int(failed_job_count),
-        mistake_count=int(mistake_count),
     )
 
 
@@ -543,115 +593,6 @@ def list_review_entries(
         page_size=page_size,
         total=int(total),
     )
-
-
-@app.post("/api/reviews/{review_id}/mistakes", response_model=MistakeItemOut, status_code=status.HTTP_201_CREATED)
-def create_mistake_item(
-    review_id: str,
-    payload: CreateMistakeItemRequest,
-    db: Session = Depends(get_db),
-) -> MistakeItemOut:
-    user = get_or_create_default_user(db)
-    review = db.get(Review, review_id)
-    if review is None:
-        raise HTTPException(status_code=404, detail="review not found")
-
-    entry = db.get(ReviewEntry, payload.review_entry_id)
-    if entry is None or entry.review_id != review_id:
-        raise HTTPException(status_code=404, detail="review entry not found")
-    if entry.deviation_level == "none" or entry.is_match:
-        raise HTTPException(status_code=400, detail="only deviated review entries can be added to mistakes")
-
-    existing = db.scalar(
-        select(MistakeItem)
-        .where(MistakeItem.user_id == user.id, MistakeItem.review_entry_id == entry.id)
-        .options(joinedload(MistakeItem.review), joinedload(MistakeItem.review_entry)),
-    )
-
-    tags = sorted({*(entry.tags_json or []), *(payload.tags or [])})
-    category = derive_mistake_category(tags, entry.decision_type)
-    snapshot = build_mistake_snapshot(review, entry)
-
-    if existing is None:
-        existing = MistakeItem(
-            user_id=user.id,
-            review_id=review.id,
-            review_entry_id=entry.id,
-            category=category,
-            note=payload.note,
-            tags_json=tags,
-            snapshot_json=snapshot,
-        )
-        db.add(existing)
-    else:
-        existing.category = category
-        existing.note = payload.note if payload.note is not None else existing.note
-        existing.tags_json = tags
-        existing.snapshot_json = snapshot
-
-    db.commit()
-    db.refresh(existing)
-    return serialize_mistake(existing)
-
-
-@app.get("/api/mistakes", response_model=PaginatedMistakeItems, response_model_by_alias=False)
-def list_mistake_items(
-    q: str | None = Query(default=None),
-    review_id: str | None = Query(default=None),
-    category: str | None = Query(default=None),
-    decision_type: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-    db: Session = Depends(get_db),
-) -> PaginatedMistakeItems:
-    user = get_or_create_default_user(db)
-    stmt = (
-        select(MistakeItem)
-        .where(MistakeItem.user_id == user.id)
-        .join(Review, MistakeItem.review_id == Review.id)
-        .join(ReviewEntry, MistakeItem.review_entry_id == ReviewEntry.id)
-        .options(joinedload(MistakeItem.review), joinedload(MistakeItem.review_entry))
-    )
-
-    if review_id:
-        stmt = stmt.where(MistakeItem.review_id == review_id)
-    if category and category != "all":
-        stmt = stmt.where(MistakeItem.category == category)
-    if decision_type and decision_type != "all":
-        stmt = stmt.where(ReviewEntry.decision_type == decision_type)
-    if q:
-        like = f"%{q}%"
-        stmt = stmt.where(
-            or_(
-                MistakeItem.note.ilike(like),
-                MistakeItem.category.ilike(like),
-                Review.target_player_label.ilike(like),
-            ),
-        )
-
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    items = db.scalars(
-        stmt.order_by(MistakeItem.created_at.desc()).offset((page - 1) * page_size).limit(page_size),
-    ).all()
-    return PaginatedMistakeItems(
-        items=[serialize_mistake(item) for item in items],
-        page=page,
-        page_size=page_size,
-        total=int(total),
-    )
-
-
-@app.delete("/api/mistakes/{mistake_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_mistake_item(mistake_id: str, db: Session = Depends(get_db)) -> Response:
-    user = get_or_create_default_user(db)
-    mistake = db.scalar(select(MistakeItem).where(MistakeItem.id == mistake_id, MistakeItem.user_id == user.id))
-    if mistake is None:
-        raise HTTPException(status_code=404, detail="mistake item not found")
-
-    db.delete(mistake)
-    db.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
 
 @app.delete("/api/reviews/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_review(review_id: str, db: Session = Depends(get_db)) -> Response:

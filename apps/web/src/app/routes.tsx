@@ -6,7 +6,6 @@ import { ReviewOpen } from "./pages/review/ReviewOpen";
 import { ReviewReport } from "./pages/review/ReviewReport";
 import { ReviewReplay } from "./pages/review/ReviewReplay";
 import { ReviewHistory } from "./pages/review/ReviewHistory";
-import { MistakeLibrary } from "./pages/training/MistakeLibrary";
 import { PlayConfig } from "./pages/play/PlayConfig";
 import { PlayGame } from "./pages/play/PlayGame";
 import { PlayHistory } from "./pages/play/PlayHistory";
@@ -41,10 +40,6 @@ export const router = createBrowserRouter([
   {
     path: "/review/history",
     Component: ReviewHistory,
-  },
-  {
-    path: "/training/mistakes",
-    Component: MistakeLibrary,
   },
   {
     path: "/play/config",

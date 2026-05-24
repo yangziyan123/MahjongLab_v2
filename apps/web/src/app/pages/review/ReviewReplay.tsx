@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRightCircle, ChevronLeft, ChevronRight, Layers3, SkipForward } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRightCircle,
+  ChevronLeft,
+  ChevronRight,
+  Layers3,
+  SkipForward,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
