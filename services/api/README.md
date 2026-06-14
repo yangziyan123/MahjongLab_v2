@@ -115,7 +115,9 @@ MAHJONGLAB_REVIEW_ASSISTANT_THINKING=true
 - `MAHJONGLAB_REVIEW_ASSISTANT_MAX_OUTPUT_TOKENS`，默认 `900`
 
 浏览器不会直接接触模型密钥。服务端会先把复盘条目编译成只包含决策时可见信息的
-`decision-context.v1`，再调用模型。
+`decision-context.v2`，其中包含稳定证据 ID、确定性牌效、公开安全信息和数据限制。
+模型必须返回 `decision-explanation.v1` JSON；服务端校验推荐动作、证据引用、数值来源
+和未来信息后才会渲染给用户。模型不可用或输出未通过校验时，自动降级到本地确定性解释。
 
 ## 本地数据目录
 

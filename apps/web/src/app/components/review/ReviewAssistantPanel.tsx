@@ -48,7 +48,15 @@ function MessageEvidence({ message }: { message: ReviewAssistantMessage }) {
   if (!message.sources) {
     return null;
   }
-  const { round, turn, actual_action, recommended_action, limitations = [] } = message.sources;
+  const {
+    round,
+    turn,
+    actual_action,
+    recommended_action,
+    limitations = [],
+    fallback_reason,
+    evidence = [],
+  } = message.sources;
   return (
     <details className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
       <summary className="flex cursor-pointer list-none items-center justify-between font-medium text-slate-700">
@@ -58,9 +66,20 @@ function MessageEvidence({ message }: { message: ReviewAssistantMessage }) {
       <div className="mt-2 space-y-1.5">
         <div>[牌桌] {round} 第 {turn} 巡</div>
         <div>[引擎] 实际 {actual_action}，推荐 {recommended_action}</div>
-        {limitations.map((limitation) => (
-          <div key={limitation}>[限制] {limitation}</div>
-        ))}
+        {fallback_reason && <div>[降级] 大模型输出未通过校验，已使用本地解释。</div>}
+        {evidence.length > 0 ? (
+          evidence.map((item) => (
+            <div key={item.id}>
+              <span className="font-mono font-semibold text-slate-700">{item.id}</span>
+              {" "}
+              {item.statement}
+            </div>
+          ))
+        ) : (
+          limitations.map((limitation) => (
+            <div key={limitation}>[限制] {limitation}</div>
+          ))
+        )}
       </div>
     </details>
   );

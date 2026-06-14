@@ -53,6 +53,7 @@ def message_text(message: ReviewMessage) -> str:
 
 
 def serialize_message(message: ReviewMessage) -> ReviewAssistantMessageOut:
+    content_json = message.content_json if isinstance(message.content_json, dict) else {}
     return ReviewAssistantMessageOut(
         id=message.id,
         role=message.role,
@@ -65,7 +66,8 @@ def serialize_message(message: ReviewMessage) -> ReviewAssistantMessageOut:
         latency_ms=message.latency_ms,
         created_at=message.created_at,
         feedback=message.feedback.rating if message.feedback is not None else None,
-        sources=message.content_json.get("sources") if isinstance(message.content_json, dict) else None,
+        sources=content_json.get("sources"),
+        explanation=content_json.get("explanation"),
     )
 
 
@@ -266,14 +268,32 @@ async def stream_reply(
             raise ReviewAssistantProviderError("大模型服务未返回完成事件")
 
         latency_ms = int((time.perf_counter() - started_at) * 1000)
+        explanation = result.explanation or {}
+        referenced_ids = {
+            evidence_id
+            for section in ("key_points", "comparison", "uncertainties")
+            for item in explanation.get(section, [])
+            if isinstance(item, dict)
+            for evidence_id in item.get("evidence_ids", [])
+            if isinstance(evidence_id, str)
+        }
+        evidence = [
+            item
+            for item in compiled.payload.get("evidence_ledger", [])
+            if isinstance(item, dict) and item.get("id") in referenced_ids
+        ]
         assistant_message.content_json = {
             "text": result.text,
+            "explanation": explanation,
+            "fallback_reason": result.fallback_reason,
             "sources": {
                 "round": compiled.payload["decision"]["round"],
                 "turn": compiled.payload["decision"]["turn"],
                 "actual_action": compiled.payload["engine_analysis"]["actual_action_label"],
                 "recommended_action": compiled.payload["engine_analysis"]["recommended_action_label"],
                 "limitations": compiled.payload["derived_facts"]["data_limitations"],
+                "evidence": evidence,
+                "fallback_reason": result.fallback_reason,
             },
         }
         assistant_message.status = "completed"

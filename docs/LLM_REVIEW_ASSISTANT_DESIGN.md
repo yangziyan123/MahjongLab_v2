@@ -245,7 +245,7 @@ AI 已读取本手的可见牌桌信息和复盘结果。
 
 ```json
 {
-  "schema_version": "decision-context.v1",
+  "schema_version": "decision-context.v2",
   "review": {
     "review_id": "uuid",
     "engine_name": "mortal",
@@ -295,23 +295,36 @@ AI 已读取本手的可见牌桌信息和复盘结果。
 }
 ```
 
-### 5.2 需要补强的确定性特征
+### 5.2 已实现的确定性特征
 
-当前 `ReviewEntry` 可以支持基础解释，但要稳定解释“为什么”，建议增加一个不依赖大模型的麻将特征计算层：
+`decision-context.v2` 已增加不依赖大模型的麻将特征计算层：
 
-- 动作前后的向听数
-- 每个候选动作的有效进张种类和剩余枚数
+- 实际动作与推荐动作切牌后的向听数
+- 两个动作的有效进张种类和基于公开牌的剩余枚数上限
 - 实际动作在候选中的排名
 - 实际动作评分、最佳动作评分和差值
-- 手牌中的对子、搭子、孤张、役牌、宝牌数量
-- 可行役种路线
-- 公开防守信号
-- 对每家可证明的现物、筋、壁等基础危险度特征
-- 点数与场况目标，例如保一、逆转、避四
+- 手牌中的对子、刻子、孤张、役牌和可见宝牌数量
+- 断幺、役牌和单一数牌花色等可见候选路线
+- 公开立直与对立直家的现物信息
+- 当前顺位、领先点差和庄家状态
 
-这些字段由确定性代码或复盘引擎生成，大模型只负责组织语言。
+尚未实现筋、壁、完整役种搜索和进张后的期望价值。这些缺口会进入 `L*` 限制证据，
+大模型不得自行补齐。
 
-### 5.3 当前数据风险
+### 5.3 证据目录与解释契约
+
+上下文为每条可用证据分配稳定 ID：
+
+- `T*`：牌桌事实
+- `E*`：引擎结论
+- `D*`：确定性推导
+- `L*`：数据限制
+
+模型输出固定为 `decision-explanation.v1`，包含结论、关键依据、动作对比、不确定性、
+判断方法和置信度。关键依据与动作对比必须引用 `T/E/D`，不确定性必须引用 `L`。
+服务端在展示前检查动作一致性、证据 ID、逐条数值来源和未来信息。
+
+### 5.4 当前数据风险
 
 真实条目中已经出现：
 
@@ -456,7 +469,7 @@ max_output_tokens
 | `user_id` | 所属用户 |
 | `review_id` | 所属复盘 |
 | `review_entry_id` | 固定绑定的决策点 |
-| `context_version` | `decision-context.v1` |
+| `context_version` | `decision-context.v2` |
 | `context_hash` | 上下文内容哈希 |
 | `title` | 自动标题 |
 | `summary_json` | 长对话摘要 |
@@ -505,7 +518,7 @@ POST /api/reviews/{review_id}/entries/{entry_id}/assistant/conversation
   "id": "uuid",
   "review_id": "uuid",
   "entry_id": 23,
-  "context_version": "decision-context.v1",
+  "context_version": "decision-context.v2",
   "context_hash": "sha256:...",
   "messages": [],
   "suggested_questions": [

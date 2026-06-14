@@ -11,6 +11,8 @@ import httpx
 
 from ..config import Settings, settings
 from .prompts import build_provider_messages
+from .schemas import ActionComparison, DecisionExplanation, EvidenceClaim
+from .validation import parse_explanation_json, render_explanation, validate_explanation
 
 
 class ReviewAssistantProviderError(RuntimeError):
@@ -22,6 +24,8 @@ class ProviderResult:
     text: str
     provider: str
     model: str
+    explanation: dict[str, Any] | None = None
+    fallback_reason: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
 
@@ -44,11 +48,29 @@ class ReviewAssistantProvider(Protocol):
         ...
 
 
-def tile_groups(hand: list[Any]) -> tuple[list[str], list[str]]:
-    tiles = [str(tile) for tile in hand if tile and tile != "?"]
-    honors = [tile for tile in tiles if tile in {"E", "S", "W", "N", "P", "F", "C"}]
-    number_tiles = [tile for tile in tiles if tile not in honors]
-    return honors, number_tiles
+def tile_feature_summary(feature: dict[str, Any]) -> str:
+    tile = feature.get("tile", "该牌")
+    category = {
+        "honor": "字牌",
+        "terminal": "幺九牌",
+        "simple": "中张牌",
+    }.get(feature.get("category"), "牌张")
+    if feature.get("isolated"):
+        return f"{tile} 是单张孤立牌"
+    nearby_tiles = feature.get("nearby_tiles") or []
+    if nearby_tiles:
+        return f"{tile} 是{category}，与 {nearby_tiles} 存在邻接"
+    return f"{tile} 是{category}"
+
+
+def efficiency_summary(profile: dict[str, Any] | None) -> str:
+    if not profile:
+        return "缺少可计算的切牌后牌效数据"
+    return (
+        f"切牌后为 {profile['shanten_after_discard']} 向听，"
+        f"有 {profile['effective_type_count']} 种有效进张，"
+        f"按公开牌计算的剩余枚数上限为 {profile['visible_remaining_upper_bound']}"
+    )
 
 
 class DeterministicReviewAssistantProvider:
@@ -61,54 +83,100 @@ class DeterministicReviewAssistantProvider:
         answer_mode: str,
     ) -> ProviderResult:
         analysis = decision_context["engine_analysis"]
-        state = decision_context["visible_state"]
         derived = decision_context["derived_facts"]
-        decision = decision_context["decision"]
         actual = analysis["actual_action_label"]
         recommended = analysis["recommended_action_label"]
-        deviation_label = {
-            "none": "命中最优",
-            "low": "低偏差",
-            "medium": "中偏差",
-            "high": "高偏差",
-        }.get(analysis["deviation_level"], analysis["deviation_level"])
-        honors, _ = tile_groups(state.get("hand", []))
-        facts = [
-            f"[引擎] 本手实际选择是{actual}，复盘引擎推荐{recommended}，偏差等级为{deviation_label}。",
-            f"[牌桌] 当前为{decision['round']}第{decision['turn']}巡，向听数为{analysis['shanten_before'] if analysis['shanten_before'] is not None else '未知'}。",
+        recommended_feature = derived.get("recommended_tile_feature") or {}
+        actual_feature = derived.get("actual_tile_feature") or {}
+        recommended_efficiency = derived.get("recommended_efficiency")
+        actual_efficiency = derived.get("actual_efficiency")
+        key_points = [
+            EvidenceClaim(claim=f"复盘引擎明确推荐{recommended}。", evidence_ids=["E2"]),
         ]
         if derived["public_riichi_count"]:
-            facts.append(f"[牌桌] 已有 {derived['public_riichi_count']} 家公开立直，需要把防守放进判断。")
-        else:
-            facts.append("[牌桌] 当前没有其他玩家公开立直，公开信息中没有立即转守的强信号。")
-
-        inference = ""
-        recommended_action = analysis.get("recommended_action", {})
-        recommended_tile = recommended_action.get("pai")
-        if (
-            recommended_action.get("type") == "dahai"
-            and recommended_tile in honors
-            and honors.count(recommended_tile) == 1
-        ):
-            inference = (
-                f"[推导] {recommended_tile} 是手中的字牌。序盘且没有公开防守压力时，先处理孤立字牌通常能保留数牌的搭子与改良空间。"
+            key_points.append(
+                EvidenceClaim(
+                    claim="当前存在公开立直，攻守判断必须纳入已公开的危险信号。",
+                    evidence_ids=["T5", "D1"],
+                ),
             )
-        elif analysis.get("score_gap") is not None:
-            inference = f"[引擎] 已保存候选评分中，推荐动作比实际动作高 {analysis['score_gap']:.4f}。"
         else:
-            inference = "[推导] 现有数据能确认推荐方向，但不足以证明两个动作的精确价值差。"
+            key_points.append(
+                EvidenceClaim(
+                    claim="当前没有公开立直，牌桌上没有立即转入全面防守的强信号。",
+                    evidence_ids=["T5", "D1"],
+                ),
+            )
+        if recommended_efficiency and len(key_points) < 3:
+            key_points.append(
+                EvidenceClaim(
+                    claim=f"推荐动作的确定性牌效结果是：{efficiency_summary(recommended_efficiency)}。",
+                    evidence_ids=["D6"],
+                ),
+            )
+        if recommended_feature and len(key_points) < 3:
+            key_points.append(
+                EvidenceClaim(
+                    claim=f"推荐动作对应的牌张特征是：{tile_feature_summary(recommended_feature)}。",
+                    evidence_ids=["D2"],
+                ),
+            )
+
+        comparison = []
+        if recommended_efficiency and actual_efficiency:
+            comparison.append(
+                ActionComparison(
+                    dimension="efficiency",
+                    actual_effect=efficiency_summary(actual_efficiency),
+                    recommended_effect=efficiency_summary(recommended_efficiency),
+                    evidence_ids=["D6"],
+                ),
+            )
+        elif recommended_feature or actual_feature:
+            comparison.append(
+                ActionComparison(
+                    dimension="flexibility",
+                    actual_effect=tile_feature_summary(actual_feature),
+                    recommended_effect=tile_feature_summary(recommended_feature),
+                    evidence_ids=["D2", "D3"],
+                ),
+            )
+        if analysis.get("score_gap") is not None:
+            comparison.append(
+                ActionComparison(
+                    dimension="value",
+                    actual_effect="采用实际动作的已保存引擎评分",
+                    recommended_effect="采用更高的已保存引擎评分",
+                    evidence_ids=["E4"],
+                ),
+            )
 
         limitations = derived.get("data_limitations", [])
-        limitation_text = f"\n\n数据限制：{'；'.join(limitations)}。" if limitations else ""
-        memory_rule = "\n\n判断方法：先看是否有必须防守的公开信号，再比较哪些切牌会破坏仍可发展的搭子。"
+        uncertainties = [
+            EvidenceClaim(claim=limitation, evidence_ids=[f"L{index}"])
+            for index, limitation in enumerate(limitations[:4], start=1)
+        ]
         if "简单" in question or "口诀" in question:
-            text = f"结论：优先{recommended}。\n\n口诀：无明显危险时，先留数牌变化，再处理孤立字牌。{limitation_text}"
+            teaching_rule = "先检查公开攻守信号，再比较两个动作对现有手牌结构的确定性影响。"
         else:
-            text = f"结论：这里更支持{recommended}，而不是{actual}。\n\n" + "\n".join(facts[:3])
-            text += f"\n{inference}{memory_rule}{limitation_text}"
-            if answer_mode == "deep":
-                text += "\n\n继续复盘时，可以逐项检查向听、有效进张、打点路线和公开危险信号。当前条目未提供的数据不应靠猜测补齐。"
-        return ProviderResult(text=text, provider="deterministic", model="mahjonglab-rules-v1")
+            teaching_rule = "先锁定引擎推荐，再用公开牌桌、牌张形状和候选评分逐项验证；缺失的数据明确留空。"
+        explanation = DecisionExplanation(
+            recommended_action=recommended,
+            actual_action=actual,
+            verdict=f"在当前可见证据下，应优先{recommended}，而不是{actual}。",
+            key_points=key_points[:3],
+            comparison=comparison,
+            uncertainties=uncertainties,
+            teaching_rule=teaching_rule,
+            confidence="low" if limitations else "medium",
+        )
+        validate_explanation(explanation, decision_context)
+        return ProviderResult(
+            text=render_explanation(explanation, answer_mode=answer_mode),
+            explanation=explanation.model_dump(mode="json"),
+            provider="deterministic",
+            model="mahjonglab-rules-v2",
+        )
 
     async def stream(
         self,
@@ -142,8 +210,37 @@ class OpenAICompatibleReviewAssistantProvider:
         answer_mode: str,
     ) -> AsyncIterator[ProviderStreamEvent]:
         messages = build_provider_messages(decision_context, history, question, answer_mode)
-        async for event in self._stream_request(messages):
-            yield event
+        try:
+            raw_result = None
+            async for event in self._stream_request(messages):
+                if event.result is not None:
+                    raw_result = event.result
+            if raw_result is None:
+                raise ReviewAssistantProviderError("大模型服务未返回完成事件")
+            explanation = parse_explanation_json(raw_result.text)
+            validate_explanation(explanation, decision_context)
+            result = ProviderResult(
+                text=render_explanation(explanation, answer_mode=answer_mode),
+                explanation=explanation.model_dump(mode="json"),
+                provider=raw_result.provider,
+                model=raw_result.model,
+                input_tokens=raw_result.input_tokens,
+                output_tokens=raw_result.output_tokens,
+            )
+        except (ReviewAssistantProviderError, ValueError) as exc:
+            result = await DeterministicReviewAssistantProvider()._generate(
+                decision_context=decision_context,
+                history=history,
+                question=question,
+                answer_mode=answer_mode,
+            )
+            result.provider = "deterministic-fallback"
+            result.fallback_reason = str(exc)
+        for index in range(0, len(result.text), 48):
+            yield ProviderStreamEvent(delta=result.text[index : index + 48])
+        yield ProviderStreamEvent(
+            result=result,
+        )
 
     def _request_options(
         self,

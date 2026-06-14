@@ -1,0 +1,5 @@
+interface:
+  display_name: "Mahjong Decision Explainer"
+  short_description: "基于结构化牌桌事实与复盘引擎证据生成可校验的日麻决策解释"
+  default_prompt: "Use $mahjong-decision-explainer to explain this riichi mahjong decision with validated evidence."
+

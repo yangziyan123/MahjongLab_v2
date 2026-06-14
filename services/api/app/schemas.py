@@ -299,6 +299,7 @@ class ReviewAssistantMessageOut(BaseModel):
     created_at: datetime
     feedback: str | None = None
     sources: dict[str, Any] | None = None
+    explanation: dict[str, Any] | None = None
 
 
 class ReviewAssistantConversationOut(BaseModel):

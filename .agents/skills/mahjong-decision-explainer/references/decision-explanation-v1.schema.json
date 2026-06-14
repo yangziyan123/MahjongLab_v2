@@ -1,0 +1,153 @@
+{
+  "$defs": {
+    "ActionComparison": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "enum": [
+            "efficiency",
+            "speed",
+            "value",
+            "defense",
+            "flexibility",
+            "placement"
+          ],
+          "title": "Dimension",
+          "type": "string"
+        },
+        "actual_effect": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Actual Effect",
+          "type": "string"
+        },
+        "recommended_effect": {
+          "maxLength": 240,
+          "minLength": 1,
+          "title": "Recommended Effect",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "dimension",
+        "actual_effect",
+        "recommended_effect",
+        "evidence_ids"
+      ],
+      "title": "ActionComparison",
+      "type": "object"
+    },
+    "EvidenceClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim": {
+          "maxLength": 300,
+          "minLength": 1,
+          "title": "Claim",
+          "type": "string"
+        },
+        "evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "title": "Evidence Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "claim",
+        "evidence_ids"
+      ],
+      "title": "EvidenceClaim",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "decision-explanation.v1",
+      "default": "decision-explanation.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "recommended_action": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Recommended Action",
+      "type": "string"
+    },
+    "actual_action": {
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Actual Action",
+      "type": "string"
+    },
+    "verdict": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Verdict",
+      "type": "string"
+    },
+    "key_points": {
+      "items": {
+        "$ref": "#/$defs/EvidenceClaim"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "title": "Key Points",
+      "type": "array"
+    },
+    "comparison": {
+      "items": {
+        "$ref": "#/$defs/ActionComparison"
+      },
+      "maxItems": 4,
+      "title": "Comparison",
+      "type": "array"
+    },
+    "uncertainties": {
+      "items": {
+        "$ref": "#/$defs/EvidenceClaim"
+      },
+      "maxItems": 4,
+      "title": "Uncertainties",
+      "type": "array"
+    },
+    "teaching_rule": {
+      "maxLength": 300,
+      "minLength": 1,
+      "title": "Teaching Rule",
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "title": "Confidence",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recommended_action",
+    "actual_action",
+    "verdict",
+    "key_points",
+    "teaching_rule",
+    "confidence"
+  ],
+  "title": "DecisionExplanation",
+  "type": "object"
+}

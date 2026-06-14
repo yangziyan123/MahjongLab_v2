@@ -198,7 +198,7 @@ class ReviewConversation(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"), nullable=False, index=True)
     review_entry_id: Mapped[int] = mapped_column(ForeignKey("review_entries.id"), nullable=False, index=True)
-    context_version: Mapped[str] = mapped_column(Text, nullable=False, default="decision-context.v1")
+    context_version: Mapped[str] = mapped_column(Text, nullable=False, default="decision-context.v2")
     context_hash: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     summary_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

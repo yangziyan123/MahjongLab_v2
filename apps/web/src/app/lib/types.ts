@@ -299,6 +299,29 @@ export interface ReviewAssistantMessage {
     actual_action?: string;
     recommended_action?: string;
     limitations?: string[];
+    fallback_reason?: string | null;
+    evidence?: Array<{
+      id: string;
+      kind: "table" | "engine" | "derived" | "limitation";
+      statement: string;
+      data?: Record<string, unknown>;
+    }>;
+  } | null;
+  explanation?: {
+    schema_version: "decision-explanation.v1";
+    recommended_action: string;
+    actual_action: string;
+    verdict: string;
+    key_points: Array<{ claim: string; evidence_ids: string[] }>;
+    comparison: Array<{
+      dimension: "efficiency" | "speed" | "value" | "defense" | "flexibility" | "placement";
+      actual_effect: string;
+      recommended_effect: string;
+      evidence_ids: string[];
+    }>;
+    uncertainties: Array<{ claim: string; evidence_ids: string[] }>;
+    teaching_rule: string;
+    confidence: "high" | "medium" | "low";
   } | null;
 }
 

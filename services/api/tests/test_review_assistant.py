@@ -23,13 +23,23 @@ from app.models import (
 )
 from app.review_assistant.context import DecisionContextCompiler
 from app.review_assistant import routes as assistant_routes
-from app.review_assistant.provider import OpenAICompatibleReviewAssistantProvider
+from app.review_assistant.provider import (
+    OpenAICompatibleReviewAssistantProvider,
+    ProviderResult,
+    ProviderStreamEvent,
+)
+from app.review_assistant.schemas import (
+    ActionComparison,
+    DecisionExplanation,
+    EvidenceClaim,
+)
 from app.review_assistant.routes import (
     conversation_history,
     create_message,
     create_or_get_conversation,
     submit_feedback,
 )
+from app.review_assistant.validation import ExplanationValidationError, validate_explanation
 from app.schemas import ReviewAssistantFeedbackRequest, ReviewAssistantMessageRequest
 
 
@@ -157,6 +167,85 @@ class ReviewAssistantTests(unittest.TestCase):
         self.assertEqual(analysis["recommended_action_score"], 0.13)
         self.assertIn("无法给出精确价值差", " ".join(compiled.payload["derived_facts"]["data_limitations"]))
 
+    def test_context_v2_builds_evidence_ledger_and_discard_efficiency(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        payload = compiled.payload
+        evidence_ids = [item["id"] for item in payload["evidence_ledger"]]
+        actual = payload["derived_facts"]["actual_efficiency"]
+        recommended = payload["derived_facts"]["recommended_efficiency"]
+
+        self.assertEqual(payload["schema_version"], "decision-context.v2")
+        self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
+        self.assertIn("D6", evidence_ids)
+        self.assertEqual(actual["shanten_after_discard"], 3)
+        self.assertEqual(recommended["shanten_after_discard"], 3)
+        self.assertEqual(actual["effective_type_count"], 14)
+        self.assertEqual(recommended["effective_type_count"], 15)
+        self.assertGreater(
+            recommended["visible_remaining_upper_bound"],
+            actual["visible_remaining_upper_bound"],
+        )
+
+    def test_validator_rejects_unknown_evidence_and_unsupported_number(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 9s",
+            verdict="这里推荐打 N。",
+            key_points=[
+                EvidenceClaim(claim="这个动作有 999 种有效进张。", evidence_ids=["X1"]),
+            ],
+            comparison=[],
+            uncertainties=[
+                EvidenceClaim(
+                    claim=compiled.payload["derived_facts"]["data_limitations"][0],
+                    evidence_ids=["L1"],
+                ),
+            ],
+            teaching_rule="只使用可核验的牌桌与引擎证据。",
+            confidence="low",
+        )
+
+        with self.assertRaises(ExplanationValidationError):
+            validate_explanation(explanation, compiled.payload)
+
+        explanation.key_points[0] = EvidenceClaim(
+            claim="这个动作有 999 种有效进张。",
+            evidence_ids=["D6"],
+        )
+        with self.assertRaisesRegex(ExplanationValidationError, "没有被本条引用证据支持"):
+            validate_explanation(explanation, compiled.payload)
+
+    def test_validator_rejects_future_information(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 9s",
+            verdict="后来摸到 7m，所以这里推荐打 N。",
+            key_points=[
+                EvidenceClaim(claim="复盘引擎推荐打 N。", evidence_ids=["E2"]),
+            ],
+            comparison=[
+                ActionComparison(
+                    dimension="efficiency",
+                    actual_effect="使用实际动作的牌效结果",
+                    recommended_effect="使用推荐动作的牌效结果",
+                    evidence_ids=["D6"],
+                ),
+            ],
+            uncertainties=[
+                EvidenceClaim(
+                    claim=compiled.payload["derived_facts"]["data_limitations"][0],
+                    evidence_ids=["L1"],
+                ),
+            ],
+            teaching_rule="只看决策时可见信息。",
+            confidence="low",
+        )
+
+        with self.assertRaisesRegex(ExplanationValidationError, "未来事件"):
+            validate_explanation(explanation, compiled.payload)
+
     def test_conversation_is_reused_for_same_entry(self) -> None:
         first = create_or_get_conversation(self.review.id, self.entry.id, self.db)
         second = create_or_get_conversation(self.review.id, self.entry.id, self.db)
@@ -193,6 +282,11 @@ class ReviewAssistantTests(unittest.TestCase):
         self.assertEqual([message.role for message in messages], ["user", "assistant"])
         self.assertIn("无法给出精确价值差", messages[1].content_json["text"])
         self.assertEqual(messages[1].model_provider, "deterministic")
+        self.assertEqual(
+            messages[1].content_json["explanation"]["schema_version"],
+            "decision-explanation.v1",
+        )
+        self.assertTrue(messages[1].content_json["sources"]["evidence"])
 
     def test_feedback_is_upserted(self) -> None:
         conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
@@ -403,6 +497,42 @@ class ReviewAssistantTests(unittest.TestCase):
         self.assertEqual(events[-1].result.text, "这里建议打 N")
         self.assertEqual(events[-1].result.input_tokens, 21)
         self.assertEqual(events[-1].result.output_tokens, 8)
+
+    def test_invalid_model_explanation_falls_back_to_validated_local_answer(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+
+        async def invalid_stream(messages):
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text="not-json",
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = invalid_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[],
+                    question="解释这一手",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        result = events[-1].result
+
+        self.assertEqual(result.provider, "deterministic-fallback")
+        self.assertEqual(result.explanation["schema_version"], "decision-explanation.v1")
+        self.assertIn("结构化解释", result.fallback_reason)
 
     def test_service_env_is_loaded_without_overriding_process_environment(self) -> None:
         env_path = Path(self.temp_dir.name) / ".env"
