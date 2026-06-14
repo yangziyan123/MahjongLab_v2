@@ -24,12 +24,16 @@ from app.models import (
 from app.review_assistant.context import DecisionContextCompiler
 from app.review_assistant import routes as assistant_routes
 from app.review_assistant.provider import (
+    DeterministicReviewAssistantProvider,
     OpenAICompatibleReviewAssistantProvider,
     ProviderResult,
     ProviderStreamEvent,
+    StreamingJsonStringField,
 )
+from app.review_assistant.prompts import build_provider_messages, should_generate_explanation
 from app.review_assistant.schemas import (
     ActionComparison,
+    ConversationAnswer,
     DecisionExplanation,
     EvidenceClaim,
 )
@@ -151,6 +155,14 @@ class ReviewAssistantTests(unittest.TestCase):
         self.db = self.Session()
         self.user, self.review, self.entry = seed_review(self.db)
 
+    def mark_entry_as_match(self) -> None:
+        self.entry.actual_action_json = dict(self.entry.expected_action_json)
+        self.entry.is_match = True
+        self.entry.deviation_level = "none"
+        self.entry.delta_score = 0
+        self.db.commit()
+        self.db.refresh(self.entry)
+
     def tearDown(self) -> None:
         self.db.close()
         assistant_routes.SessionLocal = self.original_session_local
@@ -185,6 +197,117 @@ class ReviewAssistantTests(unittest.TestCase):
             recommended["visible_remaining_upper_bound"],
             actual["visible_remaining_upper_bound"],
         )
+
+    def test_context_marks_matching_action_as_optimal(self) -> None:
+        self.mark_entry_as_match()
+
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+
+        self.assertTrue(compiled.payload["engine_analysis"]["is_match"])
+        self.assertEqual(
+            compiled.payload["engine_analysis"]["actual_action"],
+            compiled.payload["engine_analysis"]["recommended_action"],
+        )
+
+    def test_matching_action_explanation_confirms_optimal_without_self_comparison(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+
+        async def generate():
+            return await DeterministicReviewAssistantProvider()._generate(
+                decision_context=compiled.payload,
+                history=[],
+                question="请解释这一手",
+                answer_mode="concise",
+            )
+
+        result = asyncio.run(generate())
+
+        self.assertIn("命中最优", result.text)
+        self.assertNotIn("而不是", result.text)
+        self.assertEqual(result.explanation["comparison"], [])
+        self.assertEqual(result.explanation["actual_action"], result.explanation["recommended_action"])
+
+    def test_validator_rejects_self_contradiction_for_matching_action(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        limitation = compiled.payload["derived_facts"]["data_limitations"][0]
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 N",
+            verdict="在当前可见证据下，应优先打 N，而不是打 N。",
+            key_points=[
+                EvidenceClaim(
+                    claim="牌谱实际动作和复盘引擎推荐均为打 N。",
+                    evidence_ids=["E1", "E2"],
+                ),
+            ],
+            comparison=[],
+            uncertainties=[EvidenceClaim(claim=limitation, evidence_ids=["L1"])],
+            teaching_rule="先确认动作是否一致。",
+            confidence="low",
+        )
+
+        with self.assertRaisesRegex(ExplanationValidationError, "不能虚构动作差距或优劣"):
+            validate_explanation(explanation, compiled.payload)
+
+    def test_llm_matching_action_hides_bad_verdict_and_falls_back(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        limitation = compiled.payload["derived_facts"]["data_limitations"][0]
+        bad_explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 N",
+            verdict="实际动作与推荐一致，但仍应优先打 N，而不是打 N。",
+            key_points=[
+                EvidenceClaim(
+                    claim="牌谱实际动作和复盘引擎推荐均为打 N。",
+                    evidence_ids=["E1", "E2"],
+                ),
+            ],
+            comparison=[],
+            uncertainties=[EvidenceClaim(claim=limitation, evidence_ids=["L1"])],
+            teaching_rule="先确认动作是否一致。",
+            confidence="low",
+        )
+        raw_text = bad_explanation.model_dump_json()
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+
+        async def bad_stream(messages):
+            yield ProviderStreamEvent(delta=raw_text)
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=raw_text,
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = bad_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[],
+                    question="请解释这一手",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        visible_text = "".join(event.delta or "" for event in events)
+        result = events[-1].result
+
+        self.assertIn("命中最优", visible_text)
+        self.assertNotIn("而不是", visible_text)
+        self.assertEqual(result.provider, "deterministic-fallback")
+        self.assertIn("命中最优", result.text)
+        self.assertNotIn("而不是", result.text)
 
     def test_validator_rejects_unknown_evidence_and_unsupported_number(self) -> None:
         compiled = DecisionContextCompiler().compile(self.review, self.entry)
@@ -261,7 +384,6 @@ class ReviewAssistantTests(unittest.TestCase):
             conversation.id,
             ReviewAssistantMessageRequest(
                 content="为什么不是打 9s？",
-                answer_mode="concise",
                 client_request_id="request-1",
             ),
             self.db,
@@ -288,13 +410,200 @@ class ReviewAssistantTests(unittest.TestCase):
         )
         self.assertTrue(messages[1].content_json["sources"]["evidence"])
 
+    def test_greeting_returns_direct_reply_without_decision_template(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="你好",
+                client_request_id="request-greeting",
+            ),
+            self.db,
+        )
+
+        asyncio.run(collect_stream(response))
+        assistant = self.db.scalar(
+            select(ReviewMessage).where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "assistant",
+            ),
+        )
+
+        self.assertEqual(
+            assistant.content_json["text"],
+            "你好。我可以直接回答这手牌的动作、牌效或攻守问题。",
+        )
+        self.assertIsNone(assistant.content_json["explanation"])
+        self.assertIsNone(assistant.content_json["sources"])
+
+    def test_follow_up_uses_direct_conversation_contract(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        history = [
+            {"role": "user", "content": "请解释这一手"},
+            {"role": "assistant", "content": "此前的结构化解释"},
+        ]
+
+        self.assertFalse(should_generate_explanation([], "你好"))
+        self.assertFalse(should_generate_explanation(history, "那为什么牌效更好？"))
+        messages = build_provider_messages(
+            compiled.payload,
+            history,
+            "那为什么牌效更好？",
+            "concise",
+        )
+
+        self.assertIn("直接回复用户的最新消息", messages[0]["content"])
+        self.assertIn("conversation-answer.v1", messages[1]["content"])
+        self.assertEqual(messages[-1], {"role": "user", "content": "那为什么牌效更好？"})
+
+    def test_llm_follow_up_renders_only_direct_answer(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        answer = ConversationAnswer(
+            answer="因为推荐动作保留了更多有效进张类型。",
+            evidence_ids=["D6"],
+            uncertainty_ids=[],
+        )
+
+        async def direct_stream(messages):
+            self.assertIn("conversation-answer.v1", messages[1]["content"])
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=answer.model_dump_json(),
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = direct_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[
+                        {"role": "user", "content": "解释这一手"},
+                        {"role": "assistant", "content": "此前的结构化解释"},
+                    ],
+                    question="那为什么牌效更好？",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        result = events[-1].result
+
+        self.assertEqual(result.text, answer.answer)
+        self.assertIsNone(result.explanation)
+        self.assertEqual(result.evidence_ids, ["D6"])
+
+    def test_streaming_json_field_extracts_answer_across_chunks(self) -> None:
+        extractor = StreamingJsonStringField("answer")
+
+        deltas = [
+            extractor.feed('{"schema_version":"conversation-answer.v1","ans'),
+            extractor.feed('wer":"先回答\\n你的'),
+            extractor.feed('问题。","evidence_ids":[]}'),
+        ]
+
+        self.assertEqual(deltas, ["", "先回答\n你的", "问题。"])
+
+    def test_llm_follow_up_forwards_visible_answer_deltas(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        raw_text = ConversationAnswer(
+            answer="先回答你的问题。",
+            evidence_ids=["E2"],
+            uncertainty_ids=[],
+        ).model_dump_json()
+
+        async def streaming_answer(messages):
+            self.assertIn("conversation-answer.v1", messages[1]["content"])
+            chunks = [
+                '{"schema_version":"conversation-answer.v1","answer":"先回答',
+                '你的问题。","evidence_ids":["E2"],"uncertainty_ids":[]}',
+            ]
+            for chunk in chunks:
+                yield ProviderStreamEvent(delta=chunk)
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=raw_text,
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = streaming_answer
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[
+                        {"role": "user", "content": "解释这一手"},
+                        {"role": "assistant", "content": "此前的结构化解释"},
+                    ],
+                    question="那推荐是什么？",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(
+            [event.delta for event in events if event.delta],
+            ["先回答", "你的问题。"],
+        )
+        self.assertEqual(events[-1].result.text, "先回答你的问题。")
+
+    def test_second_message_answers_follow_up_without_repeating_full_template(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        first_response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="请解释这一手",
+                client_request_id="request-first-explanation",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(first_response))
+        follow_up_response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="那牌效具体差在哪里？",
+                client_request_id="request-follow-up",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(follow_up_response))
+        assistant_messages = self.db.scalars(
+            select(ReviewMessage)
+            .where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "assistant",
+            )
+            .order_by(ReviewMessage.created_at.asc()),
+        ).all()
+
+        self.assertEqual(len(assistant_messages), 2)
+        self.assertIn("单看确定性牌效", assistant_messages[1].content_json["text"])
+        self.assertNotIn("结论\n", assistant_messages[1].content_json["text"])
+        self.assertIsNone(assistant_messages[1].content_json["explanation"])
+
     def test_feedback_is_upserted(self) -> None:
         conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
         response = create_message(
             conversation.id,
             ReviewAssistantMessageRequest(
                 content="解释这一手",
-                answer_mode="concise",
                 client_request_id="request-2",
             ),
             self.db,
@@ -330,7 +639,6 @@ class ReviewAssistantTests(unittest.TestCase):
             conversation.id,
             ReviewAssistantMessageRequest(
                 content="解释这一手",
-                answer_mode="concise",
                 client_request_id="request-3",
             ),
             self.db,

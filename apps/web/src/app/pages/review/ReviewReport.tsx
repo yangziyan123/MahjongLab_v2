@@ -303,15 +303,9 @@ export function ReviewReport() {
             </div>
             <div className="flex gap-2">
               <Button asChild variant="outline" size="sm">
-                <a href={getReviewExportUrl(reportId, "json")}>
+                <a href={getReviewExportUrl(reportId)}>
                   <Download className="mr-2 h-4 w-4" />
                   JSON
-                </a>
-              </Button>
-              <Button asChild variant="outline" size="sm">
-                <a href={getReviewExportUrl(reportId, "html")}>
-                  <Download className="mr-2 h-4 w-4" />
-                  HTML
                 </a>
               </Button>
               <Link to={`/review/replay/${reportId}${entryQuery}`}>

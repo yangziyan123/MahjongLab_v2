@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 EXPLANATION_VERSION = "decision-explanation.v1"
+CONVERSATION_ANSWER_VERSION = "conversation-answer.v1"
 
 
 class EvidenceItem(BaseModel):
@@ -45,3 +46,11 @@ class DecisionExplanation(BaseModel):
     teaching_rule: str = Field(min_length=1, max_length=300)
     confidence: Literal["high", "medium", "low"]
 
+
+class ConversationAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["conversation-answer.v1"] = CONVERSATION_ANSWER_VERSION
+    answer: str = Field(min_length=1, max_length=1200)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+    uncertainty_ids: list[str] = Field(default_factory=list, max_length=8)

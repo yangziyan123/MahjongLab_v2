@@ -7,7 +7,7 @@ from _repo import add_api_to_path
 
 add_api_to_path()
 
-from app.review_assistant.schemas import DecisionExplanation, EvidenceItem  # noqa: E402
+from app.review_assistant.schemas import ConversationAnswer, DecisionExplanation, EvidenceItem  # noqa: E402
 
 
 def context_schema() -> dict:
@@ -47,6 +47,7 @@ def main() -> None:
     outputs = {
         "decision-context-v2.schema.json": context_schema(),
         "decision-explanation-v1.schema.json": DecisionExplanation.model_json_schema(),
+        "conversation-answer-v1.schema.json": ConversationAnswer.model_json_schema(),
     }
     for filename, schema in outputs.items():
         (references / filename).write_text(
@@ -58,4 +59,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

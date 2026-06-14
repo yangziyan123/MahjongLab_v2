@@ -29,8 +29,6 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 
-type AnswerMode = "concise" | "deep";
-
 const ERROR_REASONS = ["与牌桌不符", "与引擎结论不符", "使用了不可见信息", "解释太复杂"];
 
 function temporaryMessage(role: "user" | "assistant", content: string): ReviewAssistantMessage {
@@ -183,7 +181,6 @@ export function ReviewAssistantPanel({
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ReviewAssistantMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [answerMode, setAnswerMode] = useState<AnswerMode>("concise");
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -308,7 +305,6 @@ export function ReviewAssistantPanel({
         conversation.id,
         {
           content: question,
-          answer_mode: answerMode,
           client_request_id: crypto.randomUUID(),
         },
         handlers,
@@ -445,21 +441,7 @@ export function ReviewAssistantPanel({
             {error}
           </div>
         )}
-        <div className="mb-2 flex items-center justify-between">
-          <div className="flex rounded-lg bg-slate-100 p-0.5 text-xs">
-            {(["concise", "deep"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setAnswerMode(mode)}
-                className={`rounded-md px-2.5 py-1 ${
-                  answerMode === mode ? "bg-white font-medium text-slate-900 shadow-sm" : "text-slate-500"
-                }`}
-              >
-                {mode === "concise" ? "简明" : "深入"}
-              </button>
-            ))}
-          </div>
+        <div className="mb-2 flex items-center justify-end">
           {isGenerating ? (
             <button
               type="button"

@@ -316,7 +316,6 @@ class ReviewAssistantConversationOut(BaseModel):
 
 class ReviewAssistantMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=2000)
-    answer_mode: str = Field(default="concise", pattern="^(concise|deep)$")
     client_request_id: str = Field(min_length=1, max_length=64)
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import html
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -291,57 +290,6 @@ def build_review_export_payload(
         "review": review_payload,
         "entries": [serialize_entry(entry).model_dump(mode="json") for entry in entries],
     }
-
-
-def render_review_export_html(payload: dict) -> str:
-    review = payload["review"]
-    rows = []
-    for entry in payload["entries"]:
-        actual = html.escape(json.dumps(entry.get("actual_action"), ensure_ascii=False))
-        expected = html.escape(json.dumps(entry.get("expected_action"), ensure_ascii=False))
-        rows.append(
-            "<tr>"
-            f"<td>{entry['kyoku_index'] + 1}</td>"
-            f"<td>{entry['junme']}</td>"
-            f"<td>{html.escape(str(entry['decision_type']))}</td>"
-            f"<td>{html.escape(str(entry['deviation_level']))}</td>"
-            f"<td><code>{actual}</code></td>"
-            f"<td><code>{expected}</code></td>"
-            "</tr>"
-        )
-    title = html.escape(str(review.get("target_player_label") or f"玩家 {review['target_actor']}"))
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title}的复盘报告</title>
-  <style>
-    body {{ margin: 0; padding: 32px; color: #172033; background: #f4f6f8; font: 14px/1.6 system-ui, sans-serif; }}
-    main {{ max-width: 1120px; margin: 0 auto; background: #fff; padding: 28px; border: 1px solid #dce1e8; border-radius: 12px; }}
-    h1 {{ margin: 0 0 8px; font-size: 26px; }}
-    .meta {{ color: #647083; margin-bottom: 24px; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ padding: 10px; border-bottom: 1px solid #e4e8ee; text-align: left; vertical-align: top; }}
-    th {{ color: #475569; background: #f8fafc; }}
-    code {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
-  </style>
-</head>
-<body>
-  <main>
-    <h1>{title}的复盘报告</h1>
-    <div class="meta">
-      引擎：{html.escape(str(review["engine_name"]))} ·
-      决策点：{review["reviewed_decision_count"]} ·
-      高偏差：{review["high_deviation_count"]}
-    </div>
-    <table>
-      <thead><tr><th>局</th><th>巡</th><th>类型</th><th>偏差</th><th>实际动作</th><th>推荐动作</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-  </main>
-</body>
-</html>"""
 
 
 @app.on_event("startup")
@@ -766,7 +714,6 @@ def list_review_entries(
 @app.get("/api/reviews/{review_id}/export")
 def export_review(
     review_id: str,
-    export_format: str = Query(default="json", alias="format", pattern="^(json|html)$"),
     anonymous: bool | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -779,12 +726,6 @@ def export_review(
         use_anonymous = bool((job.options_json or {}).get("anonymous")) if job is not None else False
     payload = build_review_export_payload(db, review, anonymous=use_anonymous)
 
-    if export_format == "html":
-        return Response(
-            content=render_review_export_html(payload),
-            media_type="text/html; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="review-{review_id}.html"'},
-        )
     return Response(
         content=json.dumps(payload, ensure_ascii=False, indent=2),
         media_type="application/json",

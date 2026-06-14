@@ -196,11 +196,9 @@ export function getReview(reviewId: string) {
 
 export function getReviewExportUrl(
   reviewId: string,
-  format: "json" | "html",
   anonymous?: boolean,
 ) {
   return `/api/reviews/${reviewId}/export${buildQuery({
-    format,
     anonymous: anonymous === undefined ? undefined : String(anonymous),
   })}`;
 }
@@ -346,7 +344,6 @@ export async function streamReviewAssistantMessage(
   conversationId: string,
   payload: {
     content: string;
-    answer_mode: "concise" | "deep";
     client_request_id: string;
   },
   handlers: ReviewAssistantStreamHandlers,

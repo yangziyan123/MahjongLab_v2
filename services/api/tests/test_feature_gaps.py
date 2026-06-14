@@ -127,7 +127,7 @@ class FeatureGapEndpointTests(unittest.TestCase):
 
     def test_anonymous_export(self) -> None:
         review, _ = self.create_review()
-        response = main_app.export_review(review.id, export_format="json", anonymous=None, db=self.db)
+        response = main_app.export_review(review.id, anonymous=None, db=self.db)
         payload = json.loads(response.body)
         self.assertTrue(payload["anonymous"])
         self.assertEqual(payload["review"]["target_player_label"], "匿名玩家")

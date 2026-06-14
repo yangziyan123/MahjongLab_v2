@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from .schemas import DecisionExplanation, EvidenceItem
+from .schemas import ConversationAnswer, DecisionExplanation, EvidenceItem
 
 NUMBER_PATTERN = re.compile(r"(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?![A-Za-z0-9])")
 FORBIDDEN_FUTURE_PATTERNS = (
@@ -15,22 +15,47 @@ FORBIDDEN_FUTURE_PATTERNS = (
     re.compile(r"之后摸到"),
     re.compile(r"对手(?:手里|手牌|持有)"),
 )
+MATCH_CONTRADICTION_PATTERNS = (
+    re.compile(r"而不是"),
+    re.compile(r"而非"),
+    re.compile(r"实际动作.{0,12}(?:更差|不如|错误|有损)"),
+    re.compile(r"(?:两个动作|实际动作与推荐动作).{0,12}(?:存在|(?<!没)有|形成).{0,6}(?:差距|优劣)"),
+)
 
 
 class ExplanationValidationError(ValueError):
     pass
 
 
-def parse_explanation_json(text: str) -> DecisionExplanation:
+def decision_is_match(decision_context: dict[str, Any]) -> bool:
+    analysis = decision_context["engine_analysis"]
+    return bool(analysis.get("is_match")) or (
+        analysis.get("actual_action") == analysis.get("recommended_action")
+    )
+
+
+def _parse_json_model(
+    text: str,
+    model_type: type[ConversationAnswer] | type[DecisionExplanation],
+    response_label: str,
+):
     candidate = text.strip()
     if candidate.startswith("```"):
         candidate = re.sub(r"^```(?:json)?\s*", "", candidate)
         candidate = re.sub(r"\s*```$", "", candidate)
     try:
         payload = json.loads(candidate)
-        return DecisionExplanation.model_validate(payload)
+        return model_type.model_validate(payload)
     except (json.JSONDecodeError, ValidationError) as exc:
-        raise ExplanationValidationError(f"模型未返回有效的结构化解释：{exc}") from exc
+        raise ExplanationValidationError(f"模型未返回有效的{response_label}：{exc}") from exc
+
+
+def parse_explanation_json(text: str) -> DecisionExplanation:
+    return _parse_json_model(text, DecisionExplanation, "结构化解释")
+
+
+def parse_conversation_answer_json(text: str) -> ConversationAnswer:
+    return _parse_json_model(text, ConversationAnswer, "对话回答")
 
 
 def _all_text(explanation: DecisionExplanation) -> list[str]:
@@ -80,6 +105,17 @@ def validate_explanation(
         raise ExplanationValidationError("结构化解释中的推荐动作与复盘引擎不一致")
     if explanation.actual_action != analysis["actual_action_label"]:
         raise ExplanationValidationError("结构化解释中的实际动作与牌谱不一致")
+    if decision_is_match(decision_context):
+        if explanation.comparison:
+            raise ExplanationValidationError("命中最优时不能比较相同的实际动作与推荐动作")
+        matched_text = "\n".join(_all_text(explanation))
+        if any(pattern.search(matched_text) for pattern in MATCH_CONTRADICTION_PATTERNS):
+            raise ExplanationValidationError("命中最优时解释不能虚构动作差距或优劣")
+        if not any(
+            keyword in explanation.verdict
+            for keyword in ("一致", "命中", "最优", "相同")
+        ):
+            raise ExplanationValidationError("命中最优时结论必须明确实际动作与推荐一致")
 
     ledger = [
         EvidenceItem.model_validate(item)
@@ -154,6 +190,54 @@ def validate_explanation(
     if any(pattern.search(joined_text) for pattern in FORBIDDEN_FUTURE_PATTERNS):
         raise ExplanationValidationError("解释使用了未来事件或隐藏手牌信息")
     return explanation
+
+
+def validate_conversation_answer(
+    answer: ConversationAnswer,
+    decision_context: dict[str, Any],
+) -> ConversationAnswer:
+    ledger = [
+        EvidenceItem.model_validate(item)
+        for item in decision_context.get("evidence_ledger", [])
+    ]
+    evidence_by_id = {item.id: item for item in ledger}
+    referenced_ids = set(answer.evidence_ids + answer.uncertainty_ids)
+    unknown_ids = sorted(referenced_ids - evidence_by_id.keys())
+    if unknown_ids:
+        raise ExplanationValidationError(f"回答引用了不存在的证据：{', '.join(unknown_ids)}")
+
+    invalid_support = sorted(
+        evidence_id
+        for evidence_id in answer.evidence_ids
+        if evidence_by_id[evidence_id].kind == "limitation"
+    )
+    if invalid_support:
+        raise ExplanationValidationError(
+            f"限制项不能作为正向论据：{', '.join(invalid_support)}",
+        )
+
+    invalid_uncertainty = sorted(
+        evidence_id
+        for evidence_id in answer.uncertainty_ids
+        if evidence_by_id[evidence_id].kind != "limitation"
+    )
+    if invalid_uncertainty:
+        raise ExplanationValidationError(
+            f"不确定性必须引用限制证据：{', '.join(invalid_uncertainty)}",
+        )
+
+    if referenced_ids:
+        _validate_referenced_numbers([answer.answer], list(referenced_ids), evidence_by_id)
+    elif _numbers(answer.answer):
+        raise ExplanationValidationError("未引用证据的对话回答不得包含数值")
+
+    if any(pattern.search(answer.answer) for pattern in FORBIDDEN_FUTURE_PATTERNS):
+        raise ExplanationValidationError("回答使用了未来事件或隐藏手牌信息")
+    if decision_is_match(decision_context) and any(
+        pattern.search(answer.answer) for pattern in MATCH_CONTRADICTION_PATTERNS
+    ):
+        raise ExplanationValidationError("命中最优时回答不能虚构动作差距或优劣")
+    return answer
 
 
 def render_explanation(explanation: DecisionExplanation, *, answer_mode: str) -> str:

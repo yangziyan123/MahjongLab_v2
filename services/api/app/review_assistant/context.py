@@ -611,6 +611,7 @@ class DecisionContextCompiler:
                 "actual_action_label": action_label(entry.actual_action_json),
                 "recommended_action": normalized_action(entry.expected_action_json),
                 "recommended_action_label": action_label(entry.expected_action_json),
+                "is_match": entry.is_match,
                 "deviation_level": entry.deviation_level,
                 "shanten_before": entry.shanten,
                 "at_furiten": entry.at_furiten,

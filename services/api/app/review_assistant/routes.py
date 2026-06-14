@@ -30,7 +30,7 @@ from ..schemas import (
     ReviewAssistantMessageRequest,
 )
 from .context import CONTEXT_VERSION, DecisionContextCompiler, round_label, suggested_questions
-from .prompts import PROMPT_VERSION
+from .prompts import DEFAULT_ANSWER_MODE, PROMPT_VERSION
 from .provider import ReviewAssistantProviderError, get_review_assistant_provider
 
 router = APIRouter()
@@ -215,7 +215,6 @@ async def stream_reply(
     conversation_id: str,
     user_message_id: str,
     assistant_message_id: str,
-    answer_mode: str,
 ) -> AsyncIterator[str]:
     started_at = time.perf_counter()
     db = SessionLocal()
@@ -253,7 +252,7 @@ async def stream_reply(
             decision_context=compiled.payload,
             history=conversation_history(db, conversation.id, user_message.id),
             question=message_text(user_message),
-            answer_mode=answer_mode,
+            answer_mode=DEFAULT_ANSWER_MODE,
         ):
             if event.delta:
                 if first_token_ms is None:
@@ -268,25 +267,16 @@ async def stream_reply(
             raise ReviewAssistantProviderError("大模型服务未返回完成事件")
 
         latency_ms = int((time.perf_counter() - started_at) * 1000)
-        explanation = result.explanation or {}
-        referenced_ids = {
-            evidence_id
-            for section in ("key_points", "comparison", "uncertainties")
-            for item in explanation.get(section, [])
-            if isinstance(item, dict)
-            for evidence_id in item.get("evidence_ids", [])
-            if isinstance(evidence_id, str)
-        }
+        explanation = result.explanation
+        referenced_ids = set(result.evidence_ids or [])
         evidence = [
             item
             for item in compiled.payload.get("evidence_ledger", [])
             if isinstance(item, dict) and item.get("id") in referenced_ids
         ]
-        assistant_message.content_json = {
-            "text": result.text,
-            "explanation": explanation,
-            "fallback_reason": result.fallback_reason,
-            "sources": {
+        sources = None
+        if referenced_ids:
+            sources = {
                 "round": compiled.payload["decision"]["round"],
                 "turn": compiled.payload["decision"]["turn"],
                 "actual_action": compiled.payload["engine_analysis"]["actual_action_label"],
@@ -294,7 +284,12 @@ async def stream_reply(
                 "limitations": compiled.payload["derived_facts"]["data_limitations"],
                 "evidence": evidence,
                 "fallback_reason": result.fallback_reason,
-            },
+            }
+        assistant_message.content_json = {
+            "text": result.text,
+            "explanation": explanation,
+            "fallback_reason": result.fallback_reason,
+            "sources": sources,
         }
         assistant_message.status = "completed"
         assistant_message.model_provider = result.provider
@@ -310,7 +305,7 @@ async def stream_reply(
             "message.completed",
             {
                 "message": serialize_message(assistant_message).model_dump(mode="json"),
-                "sources": assistant_message.content_json["sources"],
+                "sources": sources,
             },
         )
     except asyncio.CancelledError:
@@ -420,7 +415,6 @@ def create_message(
             conversation_id=conversation.id,
             user_message_id=user_message.id,
             assistant_message_id=assistant_message.id,
-            answer_mode=payload.answer_mode,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -457,7 +451,6 @@ def regenerate_message(
             conversation_id=conversation.id,
             user_message_id=user_message.id,
             assistant_message_id=replacement.id,
-            answer_mode="concise",
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

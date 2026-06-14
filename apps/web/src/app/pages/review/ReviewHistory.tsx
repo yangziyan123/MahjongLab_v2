@@ -204,7 +204,7 @@ export function ReviewHistory() {
 
                       <div className="flex gap-2">
                         <Button asChild variant="outline" size="sm">
-                          <a href={getReviewExportUrl(report.id, "json")} aria-label="导出 JSON">
+                          <a href={getReviewExportUrl(report.id)} aria-label="导出 JSON">
                             <Download className="h-4 w-4" />
                           </a>
                         </Button>
