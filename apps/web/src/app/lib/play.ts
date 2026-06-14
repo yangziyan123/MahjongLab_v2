@@ -38,6 +38,11 @@ function getSourceText(match: PlayMatch, key: string) {
   return asString(match.source?.[key]);
 }
 
+function getSourceNumber(match: PlayMatch, key: string) {
+  const value = Number(match.source?.[key]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
 function getAgentSources(match: PlayMatch): AgentSource[] {
   const agents = match.source?.agents;
   if (!Array.isArray(agents)) {
@@ -200,6 +205,7 @@ export function getPlayScoreRows(match: PlayMatch): PlayScoreRow[] {
   const agents = getAgentSources(match);
   const scoreMap = scoreMapFromResult(match);
   const playerActor = getPlayerActor(match);
+  const startPoints = getSourceNumber(match, "start_points") ?? 25000;
   const rows: PlayScoreRow[] = [];
   const aiActors = agents
     .filter((agent) => Boolean(agent.is_ai))
@@ -225,7 +231,7 @@ export function getPlayScoreRows(match: PlayMatch): PlayScoreRow[] {
       isAi,
       isPlayer,
       score,
-      delta: score === undefined ? undefined : score - 25000,
+      delta: score === undefined ? undefined : score - startPoints,
     });
   }
 
@@ -252,4 +258,51 @@ export function getPlayScoreRows(match: PlayMatch): PlayScoreRow[] {
 
 export function getPlayerScoreRow(match: PlayMatch) {
   return getPlayScoreRows(match).find((row) => row.isPlayer);
+}
+
+export function getPlayConfigUrl(match: PlayMatch) {
+  const params = new URLSearchParams();
+  const username = getSourceText(match, "username");
+  const aiLevel = normalizeAiDifficulty(match.source?.ai_level);
+  if (username) {
+    params.set("username", username);
+  }
+  if (aiLevel) {
+    params.set("ai_level", aiLevel);
+  }
+  const matchType = getSourceText(match, "match_type") ?? match.match_type ?? undefined;
+  const seat = getSourceText(match, "requested_seat");
+  const startPoints = getSourceNumber(match, "start_points");
+  const akaDora = getSourceNumber(match, "aka_dora");
+  const kuitan = match.source?.kuitan;
+  const allowSouthEntry = match.source?.allow_south_entry;
+  if (matchType === "tonpu" || matchType === "hanchan") {
+    params.set("match_type", matchType);
+  }
+  if (seat && ["random", "east", "south", "west", "north"].includes(seat)) {
+    params.set("seat", seat);
+  }
+  if (startPoints !== undefined) {
+    params.set("start_points", String(startPoints));
+  }
+  if (akaDora === 0 || akaDora === 3) {
+    params.set("aka_dora", String(akaDora));
+  }
+  if (typeof kuitan === "boolean") {
+    params.set("kuitan", String(kuitan));
+  }
+  if (typeof allowSouthEntry === "boolean") {
+    params.set("allow_south_entry", String(allowSouthEntry));
+  }
+  const query = params.toString();
+  return query ? `/play/config?${query}` : "/play/config";
+}
+
+export function isClassicTrainingMatch(match: PlayMatch) {
+  return match.source?.origin === "classic_training";
+}
+
+export function getClassicTrainingUrl(match: PlayMatch) {
+  const gameId = getSourceText(match, "classic_game_id");
+  return gameId ? `/classic?game=${encodeURIComponent(gameId)}` : "/classic";
 }

@@ -12,7 +12,8 @@ export function PlayGame() {
   const { roomId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const initialSession = (location.state as { session?: PlaySession } | null)?.session ?? null;
+  const locationSession = (location.state as { session?: PlaySession } | null)?.session ?? null;
+  const initialSession = locationSession?.session_id === roomId ? locationSession : null;
   const [session, setSession] = useState<PlaySession | null>(initialSession);
   const [match, setMatch] = useState<PlayMatch | null>(null);
   const [isLoading, setIsLoading] = useState(!initialSession);
@@ -56,6 +57,10 @@ export function PlayGame() {
           setErrorMessage("当前没有可用的对战会话，请先从入口页启动。");
           return;
         }
+        if (latestSession.session_id !== roomId) {
+          setErrorMessage("这个对战会话已经结束或被新的对局替换，请从对战入口重新开始。");
+          return;
+        }
         setSession(latestSession);
       } catch (error) {
         if (cancelled) {
@@ -77,7 +82,7 @@ export function PlayGame() {
     return () => {
       cancelled = true;
     };
-  }, [initialSession]);
+  }, [initialSession, roomId]);
 
   useEffect(() => {
     if (!session?.match_id) {

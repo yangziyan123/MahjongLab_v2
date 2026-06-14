@@ -195,7 +195,7 @@ Web 创建 match
 - `原型设计` 前端可构建
 - `mjai.app` Python 扩展已构建并可导入
 - 阶段 1 后端最小闭环已跑通：
-  - `inline_json`
+  - `inline_jsonl`（兼容旧 `inline_json`）
   - `upload_file`
   - `internal_match`
 

@@ -828,7 +828,7 @@ components:
       properties:
         source_type:
           type: string
-          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_json]
+          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_jsonl, inline_json]
         platform:
           type: string
           nullable: true
@@ -841,7 +841,8 @@ components:
             - {"url":"https://..."}
             - {"external_id":"..."}
             - {"file_key":"uploads/..."}
-            - {"events":[...]}
+            - {"jsonl":"{\"type\":\"start_game\"}\n..."}
+            - {"events":[...]} # legacy inline_json compatibility
         target_player_ref:
           type: string
           nullable: true
@@ -892,7 +893,7 @@ components:
           type: string
         source_type:
           type: string
-          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_json]
+          enum: [internal_match, tenhou_url, tenhou_id, majsoul_url, upload_file, inline_jsonl, inline_json]
         platform:
           type: string
           nullable: true

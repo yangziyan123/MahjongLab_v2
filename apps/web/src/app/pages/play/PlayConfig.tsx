@@ -1,88 +1,170 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
-import { ArrowLeft, LoaderCircle, PlayCircle, Settings, Zap } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import { ArrowLeft, LoaderCircle, PlayCircle } from "lucide-react";
 
 import { ApiError, createPlaySession } from "../../lib/api";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 
 type AppliedAiLevel = "normal" | "hard";
-type ConfigMode = "template" | "custom";
-type Seat = "east" | "south" | "west" | "north";
-type AiStyle = "balanced" | "attack" | "defense" | "efficiency";
+type MatchType = "tonpu" | "hanchan";
+type Seat = "random" | "east" | "south" | "west" | "north";
+type AkaDora = 0 | 3;
 
-interface AiOpponentConfig {
-  style: AiStyle;
-  difficulty: AppliedAiLevel;
+interface SavedPlayConfig {
+  username: string;
+  aiLevel: AppliedAiLevel;
+  matchType: MatchType;
+  seat: Seat;
+  startPoints: number;
+  akaDora: AkaDora;
+  kuitan: boolean;
+  allowSouthEntry: boolean;
 }
 
-const seatLabels: Record<Seat, string> = {
-  east: "东家",
-  south: "南家",
-  west: "西家",
-  north: "北家",
+const configStorageKey = "mahjonglab.play-config.v2";
+const defaultConfig: SavedPlayConfig = {
+  username: "User1",
+  aiLevel: "normal",
+  matchType: "hanchan",
+  seat: "random",
+  startPoints: 25000,
+  akaDora: 3,
+  kuitan: true,
+  allowSouthEntry: false,
 };
 
-const aiStyleLabels: Record<AiStyle, string> = {
-  balanced: "均衡型",
-  attack: "进攻型",
-  defense: "防守型",
-  efficiency: "牌效型",
-};
+function readSavedConfig(): SavedPlayConfig {
+  try {
+    const value = window.localStorage.getItem(configStorageKey);
+    if (!value) {
+      return defaultConfig;
+    }
+    const parsed = JSON.parse(value) as Partial<SavedPlayConfig>;
+    const startPoints = Number(parsed.startPoints);
+    return {
+      username: typeof parsed.username === "string" && parsed.username.trim() ? parsed.username : defaultConfig.username,
+      aiLevel: parsed.aiLevel === "hard" ? "hard" : "normal",
+      matchType: parsed.matchType === "tonpu" ? "tonpu" : "hanchan",
+      seat: ["random", "east", "south", "west", "north"].includes(parsed.seat ?? "")
+        ? (parsed.seat as Seat)
+        : "random",
+      startPoints:
+        Number.isInteger(startPoints) && startPoints >= 10000 && startPoints <= 50000
+          ? startPoints
+          : defaultConfig.startPoints,
+      akaDora: parsed.akaDora === 0 ? 0 : 3,
+      kuitan: parsed.kuitan !== false,
+      allowSouthEntry: parsed.allowSouthEntry === true,
+    };
+  } catch {
+    return defaultConfig;
+  }
+}
 
-function getLaunchAiLevel(opponents: AiOpponentConfig[]): AppliedAiLevel {
-  return opponents.some((opponent) => opponent.difficulty === "hard") ? "hard" : "normal";
+function queryChoice<T extends string>(value: string | null, choices: readonly T[], fallback: T): T {
+  return value && choices.includes(value as T) ? (value as T) : fallback;
+}
+
+function queryBoolean(value: string | null, fallback: boolean) {
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  return fallback;
 }
 
 export function PlayConfig() {
   const navigate = useNavigate();
-  const [username, setUsername] = useState("User1");
-  const [seat, setSeat] = useState<Seat>("east");
-  const [configMode, setConfigMode] = useState<ConfigMode>("template");
-  const [template, setTemplate] = useState("tonpu");
-  const [matchType, setMatchType] = useState("hanchan");
-  const [startPoints, setStartPoints] = useState("25000");
-  const [timeLimit, setTimeLimit] = useState("10");
-  const [akaDora, setAkaDora] = useState("3");
-  const [kuitan, setKuitan] = useState(true);
-  const [atozuke, setAtozuke] = useState(true);
-  const [nanryu, setNanryu] = useState(false);
-  const [aiOpponents, setAiOpponents] = useState<AiOpponentConfig[]>([
-    { style: "balanced", difficulty: "normal" },
-    { style: "attack", difficulty: "normal" },
-    { style: "defense", difficulty: "normal" },
-  ]);
+  const [searchParams] = useSearchParams();
+  const [savedConfig] = useState(readSavedConfig);
+  const queryStartPointsValue = searchParams.get("start_points");
+  const queryStartPoints = queryStartPointsValue === null ? undefined : Number(queryStartPointsValue);
+  const [username, setUsername] = useState(() => {
+    const value = searchParams.get("username");
+    return value && value.trim() ? value.slice(0, 8) : savedConfig.username;
+  });
+  const [aiLevel, setAiLevel] = useState<AppliedAiLevel>(() =>
+    queryChoice(searchParams.get("ai_level"), ["normal", "hard"] as const, savedConfig.aiLevel),
+  );
+  const [matchType, setMatchType] = useState<MatchType>(() =>
+    queryChoice(searchParams.get("match_type"), ["tonpu", "hanchan"] as const, savedConfig.matchType),
+  );
+  const [seat, setSeat] = useState<Seat>(() =>
+    queryChoice(
+      searchParams.get("seat"),
+      ["random", "east", "south", "west", "north"] as const,
+      savedConfig.seat,
+    ),
+  );
+  const [startPoints, setStartPoints] = useState(() =>
+    Number.isInteger(queryStartPoints) &&
+    (queryStartPoints ?? 0) >= 10000 &&
+    (queryStartPoints ?? 0) <= 50000 &&
+    (queryStartPoints ?? 0) % 100 === 0
+      ? String(queryStartPoints)
+      : String(savedConfig.startPoints),
+  );
+  const [akaDora, setAkaDora] = useState<AkaDora>(() =>
+    searchParams.get("aka_dora") === "0" ? 0 : savedConfig.akaDora,
+  );
+  const [kuitan, setKuitan] = useState(() => queryBoolean(searchParams.get("kuitan"), savedConfig.kuitan));
+  const [allowSouthEntry, setAllowSouthEntry] = useState(() =>
+    queryBoolean(searchParams.get("allow_south_entry"), savedConfig.allowSouthEntry),
+  );
   const [isStarting, setIsStarting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const updateAiOpponent = (index: number, patch: Partial<AiOpponentConfig>) => {
-    setAiOpponents((current) =>
-      current.map((opponent, currentIndex) => (currentIndex === index ? { ...opponent, ...patch } : opponent)),
-    );
-  };
-
   const handleStartGame = async () => {
     const trimmedUsername = username.trim();
+    const parsedStartPoints = Number(startPoints);
     if (!trimmedUsername) {
       setErrorMessage("请输入用户名后再开始对局。");
+      return;
+    }
+    if (
+      !Number.isInteger(parsedStartPoints) ||
+      parsedStartPoints < 10000 ||
+      parsedStartPoints > 50000 ||
+      parsedStartPoints % 100 !== 0
+    ) {
+      setErrorMessage("起始点数必须是 10,000 到 50,000 之间的整百数。");
       return;
     }
 
     setIsStarting(true);
     setErrorMessage(null);
 
+    const config: SavedPlayConfig = {
+      username: trimmedUsername,
+      aiLevel,
+      matchType,
+      seat,
+      startPoints: parsedStartPoints,
+      akaDora,
+      kuitan,
+      allowSouthEntry: matchType === "tonpu" && allowSouthEntry,
+    };
+
     try {
       const session = await createPlaySession({
-        username: trimmedUsername,
-        ai_level: getLaunchAiLevel(aiOpponents),
-        ai_opponents: aiOpponents,
+        username: config.username,
+        ai_level: config.aiLevel,
+        match_type: config.matchType,
+        seat: config.seat,
+        start_points: config.startPoints,
+        aka_dora: config.akaDora,
+        kuitan: config.kuitan,
+        allow_south_entry: config.allowSouthEntry,
       });
+      window.localStorage.setItem(configStorageKey, JSON.stringify(config));
       navigate(`/play/game/${session.session_id}`, {
         state: { session },
       });
@@ -90,7 +172,7 @@ export function PlayConfig() {
       if (error instanceof ApiError) {
         setErrorMessage(error.detail);
       } else {
-        setErrorMessage("启动 Mahjong-AI 失败，请检查本机 Python 依赖、websockify 和端口状态。");
+        setErrorMessage("对局启动失败，请稍后重试或检查服务状态。");
       }
     } finally {
       setIsStarting(false);
@@ -105,12 +187,18 @@ export function PlayConfig() {
             <LoaderCircle className="h-7 w-7 animate-spin text-blue-400" />
           </div>
           <h1 className="text-2xl font-bold">正在启动对局</h1>
-          <p className="mt-3 text-sm text-slate-300">
-            正在拉起 Mahjong-AI 服务并准备对战页面，请稍候。
-          </p>
-          <div className="mt-6 rounded-lg border border-slate-800 bg-slate-950/70 p-4 text-left text-sm text-slate-400">
-            <div>用户名：{username.trim() || "未填写"}</div>
-            <div className="mt-1">座位：{seatLabels[seat]}</div>
+          <p className="mt-3 text-sm text-slate-300">正在准备牌桌，请稍候。</p>
+          <div className="mt-6 grid grid-cols-2 gap-3 rounded-lg border border-slate-800 bg-slate-950/70 p-4 text-left text-sm">
+            <span className="text-slate-500">AI 难度</span>
+            <span>{aiLevel === "hard" ? "进阶" : "普通"}</span>
+            <span className="text-slate-500">场次</span>
+            <span>{matchType === "tonpu" ? "东风战" : "半庄战"}</span>
+            <span className="text-slate-500">起始点数</span>
+            <span>{Number(startPoints).toLocaleString()}</span>
+            <span className="text-slate-500">座位</span>
+            <span>
+              {{ random: "随机", east: "东家", south: "南家", west: "西家", north: "北家" }[seat]}
+            </span>
           </div>
         </div>
       </div>
@@ -127,206 +215,140 @@ export function PlayConfig() {
               返回首页
             </Link>
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">创建对战房间</h1>
-          </div>
+          <h1 className="text-2xl font-bold text-slate-900">创建对战房间</h1>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8">
-        <div className="mx-auto max-w-4xl">
-          <Card>
-            <CardHeader className="space-y-2">
-              <CardTitle>房间配置</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-7">
-              <section className="space-y-4">
-                <div className="flex items-center gap-2">
-                  <PlayCircle className="h-5 w-5 text-slate-700" />
-                  <h2 className="font-semibold text-slate-900">基础信息</h2>
-                </div>
-                <div className="grid gap-5 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="username">用户名</Label>
-                    <Input
-                      id="username"
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      placeholder="例如 User1"
-                      maxLength={8}
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>座位</Label>
-                    <Select value={seat} onValueChange={(value) => setSeat(value as Seat)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="east">东家</SelectItem>
-                        <SelectItem value="south">南家</SelectItem>
-                        <SelectItem value="west">西家</SelectItem>
-                        <SelectItem value="north">北家</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </section>
-
-              <section className="space-y-4 border-t pt-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Zap className="h-5 w-5 text-slate-700" />
-                    <h2 className="font-semibold text-slate-900">规则模板</h2>
-                  </div>
-                </div>
-
-                <Tabs value={configMode} onValueChange={(value) => setConfigMode(value as ConfigMode)} className="space-y-5">
-                  <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="template">预设模板</TabsTrigger>
-                    <TabsTrigger value="custom">自定义配置</TabsTrigger>
-                  </TabsList>
-
-                  <TabsContent value="template" className="space-y-3">
-                    <Label>选择模板</Label>
-                    <Select value={template} onValueChange={setTemplate}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tonpu">东风战，标准规则</SelectItem>
-                        <SelectItem value="hanchan">半庄战，标准规则</SelectItem>
-                        <SelectItem value="defense">防守训练模板</SelectItem>
-                        <SelectItem value="riichi">立直判断训练</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </TabsContent>
-
-                  <TabsContent value="custom" className="space-y-5">
-                    <div className="grid gap-5 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>场次</Label>
-                        <Select value={matchType} onValueChange={setMatchType}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="tonpu">东风战</SelectItem>
-                            <SelectItem value="hanchan">半庄战</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="startPoints">初始点数</Label>
-                        <Input id="startPoints" type="number" value={startPoints} onChange={(event) => setStartPoints(event.target.value)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="timeLimit">时间限制，秒</Label>
-                        <Input id="timeLimit" type="number" value={timeLimit} onChange={(event) => setTimeLimit(event.target.value)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>赤宝牌</Label>
-                        <Select value={akaDora} onValueChange={setAkaDora}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="0">无赤宝</SelectItem>
-                            <SelectItem value="3">3 张赤宝</SelectItem>
-                            <SelectItem value="4">4 张赤宝</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                      <div className="flex items-center justify-between gap-4">
-                        <Label htmlFor="kuitan" className="font-normal">食断</Label>
-                        <Switch id="kuitan" checked={kuitan} onCheckedChange={setKuitan} />
-                      </div>
-                      <div className="flex items-center justify-between gap-4">
-                        <Label htmlFor="atozuke" className="font-normal">后付</Label>
-                        <Switch id="atozuke" checked={atozuke} onCheckedChange={setAtozuke} />
-                      </div>
-                      <div className="flex items-center justify-between gap-4">
-                        <Label htmlFor="nanryu" className="font-normal">南入</Label>
-                        <Switch id="nanryu" checked={nanryu} onCheckedChange={setNanryu} />
-                      </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-              </section>
-
-              <section className="space-y-4 border-t pt-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Settings className="h-5 w-5 text-slate-700" />
-                    <h2 className="font-semibold text-slate-900">AI 对手配置</h2>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {aiOpponents.map((opponent, index) => (
-                    <div key={index} className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-[120px_1fr_1fr] md:items-end">
-                      <div className="font-medium text-slate-900">AI 对手 {index + 1}</div>
-                      <div className="space-y-2">
-                        <Label>打牌风格</Label>
-                        <Select
-                          value={opponent.style}
-                          onValueChange={(value) => updateAiOpponent(index, { style: value as AiStyle })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Object.entries(aiStyleLabels).map(([value, label]) => (
-                              <SelectItem key={value} value={value}>
-                                {label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>难度</Label>
-                        <Select
-                          value={opponent.difficulty}
-                          onValueChange={(value) => updateAiOpponent(index, { difficulty: value as AppliedAiLevel })}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="normal">普通</SelectItem>
-                            <SelectItem value="hard">进阶</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              {errorMessage ? (
-                <Alert variant="destructive">
-                  <AlertTitle>启动失败</AlertTitle>
-                  <AlertDescription>{errorMessage}</AlertDescription>
-                </Alert>
-              ) : null}
-
-              <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row">
-                <Button onClick={handleStartGame} className="flex-1" size="lg" disabled={isStarting}>
-                  <PlayCircle className="mr-2 h-4 w-4" />
-                  开始对局
-                </Button>
-                <Button asChild variant="outline" className="flex-1" size="lg">
-                  <Link to="/">取消</Link>
-                </Button>
+        <Card className="mx-auto max-w-3xl">
+          <CardHeader>
+            <CardTitle>对局设置</CardTitle>
+            <CardDescription>设置本局规则，三名 AI 使用相同难度。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-8">
+            <section className="grid gap-5 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="username">用户名</Label>
+                <Input
+                  id="username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
+                  placeholder="例如 User1"
+                  maxLength={8}
+                />
               </div>
-            </CardContent>
-          </Card>
-        </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="ai-level">AI 难度</Label>
+                <Select value={aiLevel} onValueChange={(value) => setAiLevel(value as AppliedAiLevel)}>
+                  <SelectTrigger id="ai-level">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">普通</SelectItem>
+                    <SelectItem value="hard">进阶</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="match-type">场次</Label>
+                <Select value={matchType} onValueChange={(value) => setMatchType(value as MatchType)}>
+                  <SelectTrigger id="match-type">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tonpu">东风战</SelectItem>
+                    <SelectItem value="hanchan">半庄战</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="seat">座位</Label>
+                <Select value={seat} onValueChange={(value) => setSeat(value as Seat)}>
+                  <SelectTrigger id="seat">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="random">随机</SelectItem>
+                    <SelectItem value="east">东家</SelectItem>
+                    <SelectItem value="south">南家</SelectItem>
+                    <SelectItem value="west">西家</SelectItem>
+                    <SelectItem value="north">北家</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="start-points">起始点数</Label>
+                <Input
+                  id="start-points"
+                  type="number"
+                  min={10000}
+                  max={50000}
+                  step={100}
+                  value={startPoints}
+                  onChange={(event) => setStartPoints(event.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="aka-dora">赤宝牌</Label>
+                <Select value={String(akaDora)} onValueChange={(value) => setAkaDora(value === "0" ? 0 : 3)}>
+                  <SelectTrigger id="aka-dora">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="3">有赤宝牌（3 张）</SelectItem>
+                    <SelectItem value="0">无赤宝牌</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </section>
+
+            <section className="space-y-4 border-t pt-6">
+              <div className="flex items-center justify-between gap-6 rounded-lg border p-4">
+                <div>
+                  <Label htmlFor="kuitan">食断</Label>
+                  <p className="mt-1 text-sm text-slate-500">允许副露后以断幺九和牌。</p>
+                </div>
+                <Switch id="kuitan" checked={kuitan} onCheckedChange={setKuitan} />
+              </div>
+
+              {matchType === "tonpu" ? (
+                <div className="flex items-center justify-between gap-6 rounded-lg border p-4">
+                  <div>
+                    <Label htmlFor="south-entry">南入</Label>
+                    <p className="mt-1 text-sm text-slate-500">东四局结束时无人达到 30,000 点，则继续进入南场。</p>
+                  </div>
+                  <Switch
+                    id="south-entry"
+                    checked={allowSouthEntry}
+                    onCheckedChange={setAllowSouthEntry}
+                  />
+                </div>
+              ) : null}
+            </section>
+
+            {errorMessage ? (
+              <Alert variant="destructive">
+                <AlertTitle>启动失败</AlertTitle>
+                <AlertDescription>{errorMessage}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            <div className="flex flex-col gap-3 border-t pt-6 sm:flex-row">
+              <Button onClick={handleStartGame} className="flex-1" size="lg">
+                <PlayCircle className="mr-2 h-4 w-4" />
+                开始对局
+              </Button>
+              <Button asChild variant="outline" className="flex-1" size="lg">
+                <Link to="/">取消</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </main>
     </div>
   );

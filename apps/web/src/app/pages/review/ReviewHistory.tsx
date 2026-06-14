@@ -1,35 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Eye, FileText, Search, Trash2 } from "lucide-react";
-import { useDeferredValue, useMemo, useState } from "react";
+import { ArrowLeft, Download, Eye, FileText, Search, Trash2 } from "lucide-react";
+import { useDeferredValue, useEffect, useState } from "react";
 import { Link } from "react-router";
 
-import { deleteReview, listReviews } from "../../lib/api";
-import { formatDateTime, formatKyokuLabel, formatPlatform } from "../../lib/format";
-import type { Review } from "../../lib/types";
+import { deleteReview, getReviewExportUrl, listReviews } from "../../lib/api";
+import { formatDateTime, formatPlatform } from "../../lib/format";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
-
-function applyDateRangeFilter(items: Review[], dateRange: string) {
-  if (dateRange === "all") {
-    return items;
-  }
-
-  const now = Date.now();
-  const threshold =
-    dateRange === "today"
-      ? now - 24 * 60 * 60 * 1000
-      : dateRange === "week"
-        ? now - 7 * 24 * 60 * 60 * 1000
-        : now - 30 * 24 * 60 * 60 * 1000;
-
-  return items.filter((item) => {
-    const created = new Date(item.created_at).getTime();
-    return !Number.isNaN(created) && created >= threshold;
-  });
-}
 
 export function ReviewHistory() {
   const queryClient = useQueryClient();
@@ -39,15 +19,17 @@ export function ReviewHistory() {
   const [page, setPage] = useState(1);
 
   const deferredSearch = useDeferredValue(search.trim());
+  const pageSize = 10;
 
   const reviewsQuery = useQuery({
-    queryKey: ["reviews", deferredSearch, platform],
+    queryKey: ["reviews", deferredSearch, platform, dateRange, page],
     queryFn: () =>
       listReviews({
         q: deferredSearch || undefined,
         platform: platform === "all" ? undefined : platform,
-        page: 1,
-        page_size: 100,
+        date_range: dateRange,
+        page,
+        page_size: pageSize,
       }),
   });
 
@@ -62,14 +44,15 @@ export function ReviewHistory() {
     },
   });
 
-  const filteredReviews = useMemo(() => {
-    return applyDateRangeFilter(reviewsQuery.data?.items ?? [], dateRange);
-  }, [dateRange, reviewsQuery.data?.items]);
+  const reviews = reviewsQuery.data?.items ?? [];
+  const total = reviewsQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const pageSize = 10;
-  const totalPages = Math.max(1, Math.ceil(filteredReviews.length / pageSize));
-  const safePage = Math.min(page, totalPages);
-  const pagedReviews = filteredReviews.slice((safePage - 1) * pageSize, safePage * pageSize);
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const handleDelete = (reviewId: string) => {
     if (!window.confirm("确认删除这份复盘报告吗？")) {
@@ -183,9 +166,9 @@ export function ReviewHistory() {
             </Card>
           )}
 
-          {!reviewsQuery.isError && pagedReviews.length > 0 && (
+          {!reviewsQuery.isError && reviews.length > 0 && (
             <div className="space-y-4">
-              {pagedReviews.map((report) => (
+              {reviews.map((report) => (
                 <Card key={report.id} className="transition-shadow hover:shadow-md">
                   <CardContent className="pt-6">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -220,6 +203,11 @@ export function ReviewHistory() {
                       </div>
 
                       <div className="flex gap-2">
+                        <Button asChild variant="outline" size="sm">
+                          <a href={getReviewExportUrl(report.id, "json")} aria-label="导出 JSON">
+                            <Download className="h-4 w-4" />
+                          </a>
+                        </Button>
                         <Link to={`/review/open/${report.id}`}>
                           <Button variant="outline" size="sm">
                             <Eye className="mr-2 h-4 w-4" />
@@ -242,7 +230,7 @@ export function ReviewHistory() {
             </div>
           )}
 
-          {!reviewsQuery.isLoading && !reviewsQuery.isError && filteredReviews.length === 0 && (
+          {!reviewsQuery.isLoading && !reviewsQuery.isError && total === 0 && (
             <Card>
               <CardContent className="py-16 text-center">
                 <FileText className="mx-auto mb-4 h-12 w-12 text-slate-300" />
@@ -255,19 +243,19 @@ export function ReviewHistory() {
             </Card>
           )}
 
-          {filteredReviews.length > pageSize && (
+          {total > pageSize && (
             <div className="flex items-center justify-center gap-2">
-              <Button variant="outline" size="sm" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
                 上一页
               </Button>
               <div className="rounded-md border bg-white px-4 py-2 text-sm text-slate-600">
-                第 {safePage} / {totalPages} 页
+                第 {page} / {totalPages} 页，共 {total} 份
               </div>
               <Button
                 variant="outline"
                 size="sm"
-                disabled={safePage >= totalPages}
-                onClick={() => setPage(safePage + 1)}
+                disabled={page >= totalPages}
+                onClick={() => setPage(page + 1)}
               >
                 下一页
               </Button>

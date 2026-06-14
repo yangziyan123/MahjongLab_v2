@@ -154,9 +154,58 @@ class ReviewRunResult:
 
 def parse_json_line(line: str, label: str) -> dict[str, Any]:
     try:
-        return json.loads(line)
+        payload = json.loads(line)
     except json.JSONDecodeError as exc:
         raise ReviewExecutionError(f"failed to parse {label} JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ReviewExecutionError(f"{label} must be a JSON object")
+    return payload
+
+
+def parse_mjai_jsonl(content: str, label: str = "mjai JSONL") -> list[dict[str, Any]]:
+    events = []
+    for line_number, line in enumerate(content.splitlines(), start=1):
+        if not line.strip():
+            continue
+        events.append(parse_json_line(line, f"{label} line {line_number}"))
+    if not events:
+        raise ReviewExecutionError(f"{label} does not contain any events")
+    return events
+
+
+def serialize_mjai_jsonl(events: list[dict[str, Any]]) -> str:
+    return "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events)
+
+
+def parse_replay_content(content: str, label: str) -> list[dict[str, Any]]:
+    stripped = content.strip()
+    if not stripped:
+        raise ReviewExecutionError(f"empty replay content: {label}")
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return parse_mjai_jsonl(stripped, label)
+
+    if isinstance(payload, list):
+        if not all(isinstance(event, dict) for event in payload):
+            raise ReviewExecutionError(f"{label} JSON array must contain only event objects")
+        if not payload:
+            raise ReviewExecutionError(f"{label} does not contain any events")
+        return payload
+    if isinstance(payload, dict):
+        events = payload.get("events")
+        if isinstance(events, list):
+            if not all(isinstance(event, dict) for event in events):
+                raise ReviewExecutionError(f"{label} events array must contain only event objects")
+            if not events:
+                raise ReviewExecutionError(f"{label} does not contain any events")
+            return events
+        if "type" in payload:
+            return [payload]
+    raise ReviewExecutionError(
+        f"{label} must be mjai JSONL; legacy JSON arrays and objects with an events array are also accepted",
+    )
 
 
 def build_storage_artifact(prefix: str, filename: str) -> tuple[str, Path]:
@@ -459,46 +508,71 @@ def validate_explicit_majsoul_target_actor(job: ReviewJob) -> int:
 
 
 def load_events_from_file(file_path: Path) -> list[dict[str, Any]]:
-    content = read_text_compat(file_path).strip()
-    if not content:
-        raise ReviewExecutionError(f"empty replay file: {file_path}")
-    if content[0] == "[":
-        payload = json.loads(content)
-        if not isinstance(payload, list):
-            raise ReviewExecutionError("expected JSON array replay payload")
-        return payload
-    if content[0] == "{":
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError:
-            return [json.loads(line) for line in content.splitlines() if line.strip()]
-        if "events" in payload and isinstance(payload["events"], list):
-            return payload["events"]
-        if "type" in payload:
-            return [payload]
-        raise ReviewExecutionError("expected object payload with events field")
-    return [json.loads(line) for line in content.splitlines() if line.strip()]
+    return parse_replay_content(read_text_compat(file_path), str(file_path))
+
+
+def persist_normalized_mjai_events(
+    db: Session,
+    job: ReviewJob,
+    events: list[dict[str, Any]],
+    source_name: str,
+) -> list[dict[str, Any]]:
+    normalized_key = (
+        job.normalized_mjai_object_key
+        or build_storage_artifact(f"normalized/{source_name}", f"{job.id}.jsonl")[0]
+    )
+    normalized_path = settings.storage_dir / normalized_key
+    normalized_path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_path.write_text(serialize_mjai_jsonl(events), encoding="utf-8")
+    job.normalized_mjai_object_key = normalized_key
+    db.commit()
+    return events
+
+
+def load_existing_normalized_events(job: ReviewJob) -> list[dict[str, Any]] | None:
+    if not job.normalized_mjai_object_key:
+        return None
+    normalized_path = settings.storage_dir / job.normalized_mjai_object_key
+    if not normalized_path.exists():
+        return None
+    return load_events_from_file(normalized_path)
 
 
 def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
     source = job.source_payload or {}
     source_type = job.source_type
 
-    if source_type == "inline_json":
-        if isinstance(source.get("events"), list):
-            return source["events"]
+    if source_type in {"inline_jsonl", "inline_json"}:
+        normalized_events = load_existing_normalized_events(job)
+        if normalized_events is not None:
+            events = normalize_internal_match_events_for_mjai(normalized_events)
+            return persist_normalized_mjai_events(db, job, events, "inline")
         if isinstance(source.get("jsonl"), str):
-            return [json.loads(line) for line in source["jsonl"].splitlines() if line.strip()]
-        raise ReviewExecutionError("inline_json source requires events or jsonl")
+            events = normalize_internal_match_events_for_mjai(parse_mjai_jsonl(source["jsonl"]))
+            return persist_normalized_mjai_events(db, job, events, "inline")
+        if isinstance(source.get("events"), list):
+            events = source["events"]
+            if not events:
+                raise ReviewExecutionError("inline_json legacy events must not be empty")
+            if not all(isinstance(event, dict) for event in events):
+                raise ReviewExecutionError("inline_json legacy events must contain only event objects")
+            events = normalize_internal_match_events_for_mjai(events)
+            return persist_normalized_mjai_events(db, job, events, "inline")
+        raise ReviewExecutionError("inline_jsonl source requires a jsonl string")
 
     if source_type == "upload_file":
+        normalized_events = load_existing_normalized_events(job)
+        if normalized_events is not None:
+            events = normalize_internal_match_events_for_mjai(normalized_events)
+            return persist_normalized_mjai_events(db, job, events, "uploads")
         file_key = source.get("file_key")
         if not isinstance(file_key, str) or not file_key:
             raise ReviewExecutionError("upload_file source requires file_key")
         file_path = settings.storage_dir / file_key
         if not file_path.exists():
             raise ReviewExecutionError(f"upload file not found: {file_key}")
-        return load_events_from_file(file_path)
+        events = normalize_internal_match_events_for_mjai(load_events_from_file(file_path))
+        return persist_normalized_mjai_events(db, job, events, "uploads")
 
     if source_type == "internal_match":
         match_id = source.get("match_id") or job.match_id
@@ -530,18 +604,53 @@ def load_events_for_job(db: Session, job: ReviewJob) -> list[dict[str, Any]]:
     raise ReviewExecutionError(f"unsupported source_type: {source_type}")
 
 
-def determine_target_actor(job: ReviewJob) -> int:
+def visible_hand_actors(events: list[dict[str, Any]]) -> set[int]:
+    candidates: set[int] | None = None
+    for event in events:
+        if event.get("type") != "start_kyoku":
+            continue
+        tehais = event.get("tehais")
+        if not isinstance(tehais, list):
+            continue
+        visible = {
+            actor
+            for actor, hand in enumerate(tehais[:4])
+            if isinstance(hand, list) and len(hand) >= 13 and all(tile != "?" for tile in hand)
+        }
+        if not visible:
+            continue
+        candidates = visible if candidates is None else candidates & visible
+    return candidates or set()
+
+
+def determine_target_actor(job: ReviewJob, events: list[dict[str, Any]] | None = None) -> int:
     if job.source_type in {"majsoul_file", "majsoul_url"}:
         return validate_explicit_majsoul_target_actor(job)
 
     if job.target_actor is not None:
         return int(job.target_actor)
-    if job.target_player_ref is None:
-        return 0
-    try:
-        return int(job.target_player_ref)
-    except ValueError:
-        return 0
+    if job.target_player_ref is not None:
+        try:
+            return int(job.target_player_ref)
+        except ValueError:
+            return 0
+    if events is not None and job.source_type in {"upload_file", "inline_jsonl", "inline_json"}:
+        visible_actors = visible_hand_actors(events)
+        if len(visible_actors) == 1:
+            return visible_actors.pop()
+    return 0
+
+
+def validate_target_actor_visibility(events: list[dict[str, Any]], target_actor: int) -> None:
+    for event in events:
+        if event.get("type") != "start_kyoku":
+            continue
+        tehais = event.get("tehais")
+        hand = tehais[target_actor] if isinstance(tehais, list) and target_actor < len(tehais) else None
+        if not isinstance(hand, list) or len(hand) < 13 or any(tile == "?" for tile in hand):
+            raise ReviewExecutionError(
+                f"player {target_actor} hand is hidden in the replay; select a player with visible tiles",
+            )
 
 
 def normalize_actor(value: Any) -> int | None:
@@ -741,6 +850,12 @@ def normalize_internal_match_events_for_mjai(events: list[dict[str, Any]]) -> li
         if event is None:
             continue
         if event.get("type") != "start_kyoku":
+            if (
+                event.get("type") == "end_kyoku"
+                and normalized_events
+                and normalized_events[-1].get("type") == "end_kyoku"
+            ):
+                continue
             if event.get("type") in {"hora", "ryukyoku"} and event.get("deltas") is None:
                 normalized_events.append({**event, "deltas": [0, 0, 0, 0]})
             else:
@@ -1026,6 +1141,8 @@ class ReviewTableState:
 
 
 def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if any(training_actual_action(event) is not None for event in events):
+        return events
     if not settings.mjai_reviewer_manifest.exists():
         return events
 
@@ -1033,10 +1150,7 @@ def normalize_events_with_mjai_reviewer(events: list[dict[str, Any]]) -> list[di
         temp_path = Path(temp_dir)
         in_file = temp_path / "input.jsonl"
         out_file = temp_path / "normalized.jsonl"
-        in_file.write_text(
-            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events),
-            encoding="utf-8",
-        )
+        in_file.write_text(serialize_mjai_jsonl(events), encoding="utf-8")
 
         command = [
             settings.cargo_bin,
@@ -1099,6 +1213,8 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
             continue
 
         expected_action = {key: value for key, value in event.items() if key != "meta"}
+        actual_action = training_actual_action(event) or expected_action
+        is_match = action_matches(expected_action, actual_action)
         decision_type = DECISION_TYPE_MAP.get(str(event_type), "other")
         entries.append(
             ReviewEntryDraft(
@@ -1110,11 +1226,11 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
                 last_actor=last_actor,
                 tile=last_tile,
                 decision_type=decision_type,
-                actual_action=event,
+                actual_action=actual_action,
                 expected_action=expected_action,
-                is_match=True,
-                deviation_level="none",
-                delta_score=0.0,
+                is_match=is_match,
+                deviation_level="none" if is_match else "medium",
+                delta_score=0.0 if is_match else 1.0,
                 shanten=None,
                 at_furiten=None,
                 details=[
@@ -1130,23 +1246,25 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
         )
 
     reviewed_decision_count = len(entries)
+    optimal_count = sum(1 for entry in entries if entry.is_match)
+    mistake_count = reviewed_decision_count - optimal_count
     summary = {
         "target_actor": target_actor,
         "reviewed_decision_count": reviewed_decision_count,
-        "match_decision_count": reviewed_decision_count,
-        "optimal_count": reviewed_decision_count,
-        "mistake_count": 0,
+        "match_decision_count": optimal_count,
+        "optimal_count": optimal_count,
+        "mistake_count": mistake_count,
         "big_mistake_count": 0,
-        "medium_deviation_count": 0,
+        "medium_deviation_count": mistake_count,
         "high_deviation_count": 0,
         "riichi_mistake_count": 0,
         "call_mistake_count": 0,
         "defense_mistake_count": 0,
-        "rating": 1.0,
+        "rating": optimal_count / reviewed_decision_count if reviewed_decision_count else 0.0,
         "fallback_reason": reason,
     }
     stats = {
-        "rating": 1.0,
+        "rating": optimal_count / reviewed_decision_count if reviewed_decision_count else 0.0,
         "phi_matrix": [],
         "decision_type_breakdown": {
             "discard": sum(1 for entry in entries if entry.decision_type == "discard"),
@@ -1202,7 +1320,7 @@ def run_fallback_review(events: list[dict[str, Any]], target_actor: int, reason:
         engine_version="engine-free",
         model_tag=None,
         temperature=None,
-        rating=1.0,
+        rating=optimal_count / reviewed_decision_count if reviewed_decision_count else 0.0,
         summary=summary,
         stats=stats,
         entries=entries,
@@ -1263,6 +1381,13 @@ def run_mortal_review(events: list[dict[str, Any]], target_actor: int) -> tuple[
             process.kill()
 
 
+def training_actual_action(event: dict[str, Any]) -> dict[str, Any] | None:
+    meta = event.get("meta")
+    training = meta.get("classic_training") if isinstance(meta, dict) else None
+    actual_action = training.get("actual_action") if isinstance(training, dict) else None
+    return actual_action if isinstance(actual_action, dict) else None
+
+
 def next_actual_action(events: list[dict[str, Any]], start_index: int, target_actor: int) -> dict[str, Any] | None:
     decision_event = events[start_index]
     decision_type = decision_event.get("type")
@@ -1274,7 +1399,7 @@ def next_actual_action(events: list[dict[str, Any]], start_index: int, target_ac
         if event_type in BOUNDARY_TYPES:
             return None
         if event_type in ACTIONABLE_TYPES and event.get("actor") == target_actor:
-            return event
+            return training_actual_action(event) or event
         if is_reaction_window and event_type in {"tsumo", "dahai", "reach", "dora"}:
             return None
     return None
@@ -1757,7 +1882,9 @@ def build_review(
 def execute_review_job(db: Session, job: ReviewJob) -> ReviewRunResult:
     raw_events = load_events_for_job(db, job)
     events = normalize_events_with_mjai_reviewer(raw_events)
-    target_actor = determine_target_actor(job)
+    target_actor = determine_target_actor(job, events)
+    if job.source_type in {"upload_file", "inline_jsonl", "inline_json"}:
+        validate_target_actor_visibility(events, target_actor)
     job.target_actor = target_actor
     outputs, extra_data = run_mortal_review(events, target_actor)
     return build_review(events, outputs, extra_data, target_actor)

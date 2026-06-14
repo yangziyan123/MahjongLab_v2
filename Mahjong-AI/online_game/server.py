@@ -90,13 +90,34 @@ class Client(object):
 
 class GameEnvironment(object):
 
-    def __init__(self, has_aka=True, AI_count=0, min_score=0, fast=False, allow_observe=True, train=False, use_saved_models=True):
+    def __init__(
+        self,
+        has_aka=True,
+        AI_count=0,
+        min_score=0,
+        fast=False,
+        allow_observe=True,
+        train=False,
+        use_saved_models=True,
+        match_type='hanchan',
+        start_points=25000,
+        human_seat=None,
+        allow_extra_rounds=False,
+        kuitan=True,
+    ):
         self.game = MahjongGame(has_aka, is_playback=False)
         self.agents = self.game.agents
+        self.start_points = start_points
+        for agent in self.agents:
+            agent.score = start_points // 100
         self.round = 0
         self.honba = 0
         self.riichi_ba = 0
         self.has_aka = has_aka
+        self.match_type = match_type
+        self.human_seat = human_seat
+        self.allow_extra_rounds = allow_extra_rounds
+        self.kuitan = kuitan
 
         self.clients = []
         self.observe_info = defaultdict(list)  # {who: [observer_client]}
@@ -146,6 +167,8 @@ class GameEnvironment(object):
         logging.info("Game is reset")
         self.game = MahjongGame(self.has_aka, is_playback=False)
         self.agents = self.game.agents
+        for agent in self.agents:
+            agent.score = self.start_points // 100
         self.round = 0
         self.honba = 0
         self.riichi_ba = 0
@@ -162,6 +185,19 @@ class GameEnvironment(object):
             self.reward_features.clear()
         for i in range(self.AI_count):
             self.clients.append(Client(f'一姬{i + 1}(简单)', username=f'一姬{i + 1}(简单)'))
+
+    def arrange_players(self):
+        if self.human_seat is None:
+            random.shuffle(self.clients)
+            return
+        human_clients = [client for client in self.clients if client.is_human()]
+        ai_clients = [client for client in self.clients if not client.is_human()]
+        if len(human_clients) != 1 or len(ai_clients) != 3:
+            random.shuffle(self.clients)
+            return
+        random.shuffle(ai_clients)
+        self.clients = ai_clients
+        self.clients.insert(self.human_seat, human_clients[0])
 
     def update(self, key, value, client: Client = None):
         if client is None:
@@ -564,10 +600,12 @@ class GameEnvironment(object):
             self.round += 1
         if min(p.score for p in self.agents) * 100 < self.min_score:
             return True, score_delta
-        if self.round > 11:
+        nominal_final_round = 3 if self.match_type == 'tonpu' else 7
+        maximum_final_round = 7 if self.match_type == 'tonpu' and self.allow_extra_rounds else nominal_final_round
+        if self.round > maximum_final_round:
             return True, score_delta
-        if self.round > 7 or (self.round == 7 and not change_oya):
-            if max(p.score for p in self.agents) < 300:
+        if self.round > nominal_final_round or (self.round == nominal_final_round and not change_oya):
+            if self.allow_extra_rounds and max(p.score for p in self.agents) < 300:
                 return False, score_delta
             if change_oya:
                 if self.riichi_ba:
@@ -658,7 +696,8 @@ class GameEnvironment(object):
                 riichi=player.riichi_status,
                 ippatsu=player.ippatsu_status,
                 tokusyu=tokusyu,
-                aka=self.has_aka
+                aka=self.has_aka,
+                allow_open_tanyao=self.kuitan,
             )
             agari = yaku.agari
             if self.game.first_round:
@@ -800,7 +839,8 @@ class GameEnvironment(object):
                     riichi=player.riichi_status,
                     ippatsu=player.ippatsu_status,
                     tokusyu=tokusyu,
-                    aka=self.has_aka
+                    aka=self.has_aka,
+                    allow_open_tanyao=self.kuitan,
                 )
                 agari = yaku.agari
                 if yaku.naive_check_yaku():
@@ -1191,7 +1231,23 @@ class GameEnvironment(object):
 
 
 class Server:
-    def __init__(self, host, port, AI_count, min_score, fast, allow_observe, train=False, disable_ai_models=False):
+    def __init__(
+        self,
+        host,
+        port,
+        AI_count,
+        min_score,
+        fast,
+        allow_observe,
+        train=False,
+        disable_ai_models=False,
+        match_type='hanchan',
+        start_points=25000,
+        human_seat=None,
+        has_aka=True,
+        allow_extra_rounds=False,
+        kuitan=True,
+    ):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((host, port))
@@ -1204,13 +1260,18 @@ class Server:
         self.AI_count = AI_count
         self.train = train
         self.game = GameEnvironment(
-            has_aka=True,
+            has_aka=has_aka,
             AI_count=AI_count,
             min_score=min_score,
             fast=fast,
             allow_observe=allow_observe,
             train=train,
             use_saved_models=not disable_ai_models,
+            match_type=match_type,
+            start_points=start_points,
+            human_seat=human_seat,
+            allow_extra_rounds=allow_extra_rounds,
+            kuitan=kuitan,
         )
         logging.info(red(f"Server running at {host}:{port} with {self.AI_count} AI..."))
 
@@ -1276,7 +1337,7 @@ class Server:
 
     async def game_main_loop(self):
         self.game.game_start = True
-        random.shuffle(self.game.clients)
+        self.game.arrange_players()
         while self.game.game_start:
             self.game.start()
             self.game.send_all_game_info()
@@ -1384,6 +1445,12 @@ if __name__ == '__main__':
     args.add_argument('--fast', '-f', action='store_true', help='Cancel AI thinking time')
     args.add_argument('--train', '-t', action='store_true', help='Collect playing data')
     args.add_argument('--disable_ai_models', action='store_true', help='Disable model/saved weights for AI decisions')
+    args.add_argument('--match_type', choices=['tonpu', 'hanchan'], default='hanchan')
+    args.add_argument('--start_points', type=int, default=25000)
+    args.add_argument('--human_seat', type=int, choices=range(4), default=None)
+    args.add_argument('--no_aka', action='store_true')
+    args.add_argument('--allow_extra_rounds', action='store_true')
+    args.add_argument('--disable_kuitan', action='store_true')
     args = args.parse_args()
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -1398,5 +1465,11 @@ if __name__ == '__main__':
         args.allow_observe,
         args.train,
         args.disable_ai_models,
+        args.match_type,
+        args.start_points,
+        args.human_seat,
+        not args.no_aka,
+        args.allow_extra_rounds,
+        not args.disable_kuitan,
     )
     asyncio.run(server.run())

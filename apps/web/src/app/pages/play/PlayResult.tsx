@@ -9,6 +9,7 @@ import {
   formatMatchType,
   formatReviewJobStatus,
   formatSignedPoints,
+  getPlayConfigUrl,
   getPlayerScoreRow,
   getPlayScoreRows,
 } from "../../lib/play";
@@ -86,6 +87,7 @@ export function PlayResult() {
   }
 
   const match = matchQuery.data;
+  const rematchUrl = getPlayConfigUrl(match);
   const scoreRows = getPlayScoreRows(match);
   const playerRow = getPlayerScoreRow(match);
   const latestReviewJob = match.latest_review_job;
@@ -134,9 +136,9 @@ export function PlayResult() {
             <h1 className="ml-4 text-2xl font-bold text-slate-900">对局结算</h1>
           </div>
           <Button asChild>
-            <Link to="/play/config">
+            <Link to={rematchUrl}>
               <PlayCircle className="mr-2 h-4 w-4" />
-              新建对局
+              沿用配置再来一局
             </Link>
           </Button>
         </div>
@@ -256,6 +258,12 @@ export function PlayResult() {
                 <Button variant="outline" className="w-full" onClick={handleExport}>
                   <Download className="mr-2 h-4 w-4" />
                   导出 JSONL
+                </Button>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to={rematchUrl}>
+                    <PlayCircle className="mr-2 h-4 w-4" />
+                    沿用配置再来一局
+                  </Link>
                 </Button>
                 <Button asChild variant="outline" className="w-full">
                   <Link to="/play/history">

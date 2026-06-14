@@ -5,17 +5,22 @@ description = "Review-first backend MVP for MahjongLab"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.135,<1.0",
+  "httpx>=0.27,<1.0",
   "uvicorn>=0.44,<1.0",
   "sqlalchemy>=2.0,<3.0",
   "pydantic>=2.10,<3.0",
+  "python-dotenv>=1.0,<2.0",
   "python-multipart>=0.0.26,<1.0",
-  "playwright>=1.58,<2.0"
+  "playwright>=1.58,<2.0",
+  "tensoul==0.1.8"
 ]
 
 [project.optional-dependencies]
+test = [
+  "pytest>=9.0,<10.0",
+]
 play = [
   "numpy>=1.25,<2.0",
-  "h11>=0.13,<0.15",
   "quart>=0.19,<1.0",
   "termcolor>=2.3,<3.0",
   "torch>=2.0,<3.0",

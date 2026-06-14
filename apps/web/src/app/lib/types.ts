@@ -17,6 +17,12 @@ export interface UserProfile {
 export interface CreatePlaySessionRequest {
   username: string;
   ai_level: "normal" | "hard";
+  match_type: "tonpu" | "hanchan";
+  seat: "random" | "east" | "south" | "west" | "north";
+  start_points: number;
+  aka_dora: 0 | 3;
+  kuitan: boolean;
+  allow_south_entry: boolean;
   ai_opponents?: Array<{
     style: string;
     difficulty: "normal" | "hard";
@@ -77,10 +83,85 @@ export interface PaginatedPlayMatches {
   total: number;
 }
 
-export interface DashboardSummary {
-  review_count: number;
-  completed_job_count: number;
-  failed_job_count: number;
+export interface ClassicGameHand {
+  index: number;
+  label: string;
+  scores: number[];
+  decision_count: number;
+}
+
+export interface ClassicGame {
+  id: string;
+  title: string;
+  subtitle: string;
+  source: string;
+  year: number;
+  match_type: string;
+  players: string[];
+  tags: string[];
+  summary: string;
+  hand_count: number;
+  decision_count: number;
+  hands: ClassicGameHand[];
+}
+
+export interface ClassicTrainingDecision {
+  decision_index: number;
+  total_decisions: number;
+  hand_index: number;
+  hand_label: string;
+  turn: number;
+  action_type: string;
+  state_snapshot: Record<string, unknown>;
+  options: Array<{
+    type: "dahai";
+    pai: string;
+  }>;
+}
+
+export interface ClassicTrainingComparison {
+  decision_index: number;
+  hand_index: number;
+  hand_label: string;
+  turn: number;
+  actual_action: Record<string, unknown>;
+  original_action: Record<string, unknown>;
+  is_same: boolean;
+}
+
+export interface ClassicTrainingHandSummary {
+  hand_index: number;
+  hand_label: string;
+  decision_count: number;
+  same_count: number;
+  different_count: number;
+  agreement_rate: number;
+}
+
+export interface ClassicTrainingComparisonSummary {
+  decision_count: number;
+  same_count: number;
+  different_count: number;
+  agreement_rate: number;
+  route_label: string;
+  route_description: string;
+  hands: ClassicTrainingHandSummary[];
+}
+
+export interface ClassicTrainingSession {
+  match_id: string;
+  status: string;
+  username: string;
+  game: ClassicGame;
+  start_hand_index: number;
+  answered_count: number;
+  total_decisions: number;
+  current_decision?: ClassicTrainingDecision | null;
+  history: ClassicTrainingComparison[];
+  comparison_summary?: ClassicTrainingComparisonSummary | null;
+  result?: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ReplaySourceOption {
@@ -198,4 +279,44 @@ export interface PaginatedReviewEntries {
   page: number;
   page_size: number;
   total: number;
+}
+
+export interface ReviewAssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  status: "streaming" | "completed" | "failed" | "cancelled";
+  model_provider?: string | null;
+  model_name?: string | null;
+  prompt_version?: string | null;
+  context_hash: string;
+  latency_ms?: number | null;
+  created_at: string;
+  feedback?: "helpful" | "unhelpful" | "error" | null;
+  sources?: {
+    round?: string;
+    turn?: number;
+    actual_action?: string;
+    recommended_action?: string;
+    limitations?: string[];
+  } | null;
+}
+
+export interface ReviewAssistantConversation {
+  id: string;
+  review_id: string;
+  entry_id: number;
+  context_version: string;
+  context_hash: string;
+  title: string;
+  provider_mode: "llm" | "deterministic";
+  messages: ReviewAssistantMessage[];
+  suggested_questions: string[];
+}
+
+export interface ReviewAssistantStreamHandlers {
+  onStarted?: (payload: { message_id: string; context_hash: string; provider_mode: string }) => void;
+  onDelta?: (payload: { message_id: string; delta: string }) => void;
+  onCompleted?: (payload: { message: ReviewAssistantMessage }) => void;
+  onFailed?: (payload: { message_id: string; detail: string }) => void;
 }

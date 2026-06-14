@@ -5,20 +5,21 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
-from urllib.parse import parse_qs, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, urljoin, urlparse
 from urllib.request import Request, urlopen
 
-DOWNLOADLOGS_SCRIPT_URL = (
-    "https://gist.githubusercontent.com/Equim-chan/875a232a2c1d31181df8b3a8704c3112/raw/"
-    "a0533ae7a0ab0158ca9ad9771663e94b82b61572/downloadlogs.js"
-)
 SUPPORTED_HOST_MARKERS = ("mahjongsoul", "maj-soul", "union-game")
 PROFILE_NAMES = ("Default", "Profile 1", "Profile 2", "Profile 3", "Profile 4")
 SNAPSHOT_ROOT_FILES = ("Local State", "First Run")
+FRAME_REQUEST = 0x02
+FRAME_RESPONSE = 0x03
+FETCH_GAME_RECORD_MARKER = b"fetchGameRecord\x12"
+DEFAULT_CAPTURE_TIMEOUT_SECONDS = 90
 SNAPSHOT_SKIP_NAMES = {
     "Cache",
     "Code Cache",
@@ -53,6 +54,53 @@ class BrowserCandidate:
     @property
     def profile_dir(self) -> Path:
         return self.user_data_dir / self.profile_name
+
+
+@dataclass(slots=True)
+class GameRecordFrameCapture:
+    pending_indexes: dict[int, int]
+    response: bytes | None = None
+    saw_binary_frame: bool = False
+    saw_record_request: bool = False
+
+    def __init__(self) -> None:
+        self.pending_indexes = {}
+        self.response = None
+        self.saw_binary_frame = False
+        self.saw_record_request = False
+
+    def observe_sent(self, connection_id: int, payload: str | bytes) -> None:
+        frame = binary_frame(payload)
+        if frame is None:
+            return
+        self.saw_binary_frame = True
+        if len(frame) < 3 or frame[0] != FRAME_REQUEST:
+            return
+        if FETCH_GAME_RECORD_MARKER not in frame:
+            return
+        self.pending_indexes[connection_id] = frame_index(frame)
+        self.saw_record_request = True
+
+    def observe_received(self, connection_id: int, payload: str | bytes) -> None:
+        frame = binary_frame(payload)
+        if frame is None:
+            return
+        self.saw_binary_frame = True
+        if len(frame) < 3 or frame[0] != FRAME_RESPONSE:
+            return
+        expected_index = self.pending_indexes.get(connection_id)
+        if expected_index is None or frame_index(frame) != expected_index:
+            return
+        self.response = frame
+        self.pending_indexes.pop(connection_id, None)
+
+
+def binary_frame(payload: str | bytes) -> bytes | None:
+    return payload if isinstance(payload, bytes) else None
+
+
+def frame_index(frame: bytes) -> int:
+    return int.from_bytes(frame[1:3], byteorder="little")
 
 
 def parse_majsoul_url(url_text: str) -> tuple[str, str]:
@@ -213,56 +261,73 @@ def iter_launchable_executables(primary: Path) -> Iterator[Path]:
         yield executable
 
 
-@lru_cache(maxsize=1)
-def fetch_downloadlogs_script() -> str:
+def download_record_data(data_url: str, base_url: str) -> bytes:
     request = Request(
-        DOWNLOADLOGS_SCRIPT_URL,
+        urljoin(base_url, data_url),
         headers={
+            "Referer": base_url,
             "User-Agent": "Mozilla/5.0",
         },
     )
-    with urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8")
+    try:
+        with urlopen(request, timeout=60) as response:
+            return response.read()
+    except HTTPError as exc:
+        raise MajsoulUrlImportError(f"failed to download Mahjong Soul record data: HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise MajsoulUrlImportError(f"failed to download Mahjong Soul record data: {exc.reason}") from exc
 
 
-def build_downloadlogs_bridge_script() -> str:
-    script = fetch_downloadlogs_script()
-    callback_marker = "function(i, record) {"
-    if callback_marker not in script:
-        raise MajsoulUrlImportError("downloadlogs bridge script no longer matches the expected callback signature")
+def decode_majsoul_record_frame(frame: bytes, base_url: str) -> str:
+    try:
+        from google.protobuf.message import DecodeError
+        from ms import protocol_pb2 as protocol
+        from tensoul.downloader import MajsoulPaipuDownloader
+    except Exception as exc:  # pragma: no cover - import error is environment-specific
+        raise MajsoulUrlImportError(
+            "Mahjong Soul protocol decoder is unavailable; install backend dependencies first",
+        ) from exc
 
-    script = script.replace(
-        callback_marker,
-        (
-            "function(i, record) {"
-            " if (i) {"
-            " window.__MJL_ERROR = typeof i === 'string' ? i : JSON.stringify(i);"
-            " return;"
-            " }"
-        ),
-        1,
-    )
+    if len(frame) < 4 or frame[0] != FRAME_RESPONSE:
+        raise MajsoulUrlImportError("captured Mahjong Soul frame is not a record response")
 
-    export_marker = "})();\n// vim: ts=4  et\n"
-    if export_marker not in script:
-        raise MajsoulUrlImportError("downloadlogs bridge script no longer matches the expected footer")
+    try:
+        wrapper = protocol.Wrapper()
+        wrapper.ParseFromString(frame[3:])
+        record = protocol.ResGameRecord()
+        record.ParseFromString(wrapper.data)
+    except DecodeError as exc:
+        raise MajsoulUrlImportError("captured Mahjong Soul record response could not be decoded") from exc
 
-    return script.replace(
-        export_marker,
-        "window.__MJL_DOWNLOADLOG = downloadlog;})();\n// vim: ts=4  et\n",
-        1,
-    )
+    if record.error.code:
+        raise MajsoulUrlImportError(f"Mahjong Soul returned record error code {record.error.code}")
+    if not record.HasField("head"):
+        raise MajsoulUrlImportError("captured response is not a Mahjong Soul game record")
+    if not record.data and record.data_url:
+        record.data = download_record_data(record.data_url, base_url)
+    if not record.data:
+        raise MajsoulUrlImportError("Mahjong Soul game record response did not contain replay data")
+
+    try:
+        converter = MajsoulPaipuDownloader.__new__(MajsoulPaipuDownloader)
+        payload = converter._handle_game_record(record)
+    except Exception as exc:
+        raise MajsoulUrlImportError(f"failed to convert Mahjong Soul replay: {exc}") from exc
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("log"), list):
+        raise MajsoulUrlImportError("converted Mahjong Soul replay is not in the expected converter format")
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def download_majsoul_log_from_url(url_text: str, target_path: Path) -> str:
     replay_url = url_text.strip()
-    _base_url, game_uuid = parse_majsoul_url(replay_url)
-    script = build_downloadlogs_bridge_script()
+    base_url, game_uuid = parse_majsoul_url(replay_url)
 
     errors: list[str] = []
     for candidate in iter_browser_candidates():
         try:
-            content = fetch_majsoul_log_with_browser(candidate, replay_url, game_uuid, script)
+            frame = fetch_majsoul_record_frame_with_browser(candidate, replay_url)
+            content = decode_majsoul_record_frame(frame, base_url)
         except MajsoulUrlImportError as exc:
             errors.append(f"{candidate.label}: {exc}")
             continue
@@ -281,12 +346,10 @@ def download_majsoul_log_from_url(url_text: str, target_path: Path) -> str:
     )
 
 
-def fetch_majsoul_log_with_browser(
+def fetch_majsoul_record_frame_with_browser(
     candidate: BrowserCandidate,
     replay_url: str,
-    game_uuid: str,
-    script: str,
-) -> str:
+) -> bytes:
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
@@ -295,6 +358,10 @@ def fetch_majsoul_log_with_browser(
 
     snapshot_candidate, snapshot_temp_dir = create_browser_snapshot(candidate)
     launch_errors: list[str] = []
+    capture_timeout_seconds = max(
+        10,
+        int(os.getenv("MAHJONGLAB_MAJSOUL_CAPTURE_TIMEOUT_SECONDS", DEFAULT_CAPTURE_TIMEOUT_SECONDS)),
+    )
     try:
         with sync_playwright() as playwright:
             for executable_path in iter_launchable_executables(snapshot_candidate.executable_path):
@@ -311,77 +378,39 @@ def fetch_majsoul_log_with_browser(
 
                 try:
                     page = context.pages[0] if context.pages else context.new_page()
+                    capture = GameRecordFrameCapture()
+
+                    def observe_websocket(websocket: object) -> None:
+                        connection_id = id(websocket)
+                        websocket.on(
+                            "framesent",
+                            lambda payload: capture.observe_sent(connection_id, payload),
+                        )
+                        websocket.on(
+                            "framereceived",
+                            lambda payload: capture.observe_received(connection_id, payload),
+                        )
+
+                    page.on("websocket", observe_websocket)
                     page.goto(replay_url, wait_until="domcontentloaded", timeout=120000)
-                    page.wait_for_function(
-                        """
-                        (expectedUuid) => {
-                          if (!(window.app?.NetAgent && window.GameMgr?.Inst?.getClientVersion)) {
-                            return false;
-                          }
-                          if (!window.GameMgr.Inst.record_uuid) {
-                            window.GameMgr.Inst.record_uuid = expectedUuid;
-                          }
-                          return window.GameMgr.Inst.record_uuid === expectedUuid;
-                        }
-                        """,
-                        arg=game_uuid,
-                        timeout=60000,
+
+                    deadline = time.monotonic() + capture_timeout_seconds
+                    while capture.response is None and time.monotonic() < deadline:
+                        page.wait_for_timeout(250)
+
+                    if capture.response is not None:
+                        return capture.response
+                    if capture.saw_record_request:
+                        raise MajsoulUrlImportError(
+                            "browser requested the replay but Mahjong Soul did not return it before the timeout",
+                        )
+                    if capture.saw_binary_frame:
+                        raise MajsoulUrlImportError(
+                            "browser session did not request this replay; sign in to Mahjong Soul in this profile and retry",
+                        )
+                    raise MajsoulUrlImportError(
+                        "Mahjong Soul game connection did not start; this browser profile may not be logged in",
                     )
-                    page.wait_for_timeout(2000)
-                    result = page.evaluate(
-                        """
-                        async ({ gameUuid, bridgeScript }) => {
-                          const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-                          window.__MJL_CAPTURE = null;
-                          window.__MJL_ERROR = null;
-
-                          const originalClick = HTMLAnchorElement.prototype.click;
-                          HTMLAnchorElement.prototype.click = function (...args) {
-                            const href = this.getAttribute("href") || "";
-                            if (href.startsWith("data:text/plain;charset=utf-8,")) {
-                              window.__MJL_CAPTURE = {
-                                filename: this.getAttribute("download") || "majsoul.json",
-                                text: decodeURIComponent(href.slice("data:text/plain;charset=utf-8,".length)),
-                              };
-                              return;
-                            }
-                            return originalClick.apply(this, args);
-                          };
-
-                          try {
-                            window.GameMgr.Inst.record_uuid = gameUuid;
-                            eval(bridgeScript);
-                            if (typeof window.__MJL_DOWNLOADLOG !== "function") {
-                              throw new Error("downloadlogs bridge did not expose downloadlog()");
-                            }
-                            window.__MJL_DOWNLOADLOG();
-
-                            for (let i = 0; i < 90; i += 1) {
-                              if (window.__MJL_CAPTURE || window.__MJL_ERROR) {
-                                break;
-                              }
-                              await wait(1000);
-                            }
-
-                            return {
-                              accountId: window.GameMgr?.Inst?.account_id ?? null,
-                              error: window.__MJL_ERROR,
-                              captured: window.__MJL_CAPTURE?.text || null,
-                            };
-                          } catch (error) {
-                            return {
-                              accountId: window.GameMgr?.Inst?.account_id ?? null,
-                              error: String(error),
-                              captured: null,
-                            };
-                          } finally {
-                            HTMLAnchorElement.prototype.click = originalClick;
-                          }
-                        }
-                        """,
-                        {"gameUuid": game_uuid, "bridgeScript": script},
-                    )
-                    break
                 finally:
                     context.close()
             else:
@@ -391,24 +420,3 @@ def fetch_majsoul_log_with_browser(
                 )
     finally:
         snapshot_temp_dir.cleanup()
-
-    account_id = result.get("accountId")
-    captured = result.get("captured")
-    if captured:
-        try:
-            payload = json.loads(captured)
-        except json.JSONDecodeError as exc:
-            raise MajsoulUrlImportError("downloaded Mahjong Soul replay could not be parsed as JSON") from exc
-        if not isinstance(payload, dict) or "log" not in payload:
-            raise MajsoulUrlImportError("downloaded Mahjong Soul replay is not in the expected converter format")
-        return captured
-
-    error = result.get("error")
-    if error == "no open" or account_id in {-1, None}:
-        raise MajsoulUrlImportError(
-            "browser profile is not logged into Mahjong Soul; sign in locally and retry",
-        )
-    if isinstance(error, str) and error:
-        raise MajsoulUrlImportError(error)
-
-    raise MajsoulUrlImportError("browser session did not return a Mahjong Soul replay within the timeout")

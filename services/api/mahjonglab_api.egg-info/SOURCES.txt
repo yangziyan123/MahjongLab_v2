@@ -15,4 +15,5 @@ mahjonglab_api.egg-info/SOURCES.txt
 mahjonglab_api.egg-info/dependency_links.txt
 mahjonglab_api.egg-info/requires.txt
 mahjonglab_api.egg-info/top_level.txt
+tests/test_review_assistant.py
 tests/test_review_engine.py

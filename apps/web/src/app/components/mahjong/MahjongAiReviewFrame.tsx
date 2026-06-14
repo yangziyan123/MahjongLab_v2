@@ -73,7 +73,13 @@ type MahjongAiReviewPayload = {
   reviewDrawTileId: number | null;
 };
 
-const FRAME_SRC = "/api/mahjong-ai-web/review_replay.html";
+type MahjongAiTableEntry = Pick<
+  ReviewEntry,
+  "id" | "state_snapshot" | "kyoku_index" | "honba" | "tiles_left"
+> &
+  Partial<Pick<ReviewEntry, "junme" | "is_match">>;
+
+const FRAME_SRC = "/api/mahjong-ai-web/review_replay.html?v=20260613-training-table";
 const HONOR_TILE_KIND: Record<string, number> = {
   E: 27,
   S: 28,
@@ -84,7 +90,7 @@ const HONOR_TILE_KIND: Record<string, number> = {
   C: 33,
 };
 
-function getTableSnapshot(entry: ReviewEntry): TableSnapshot | null {
+function getTableSnapshot(entry: MahjongAiTableEntry): TableSnapshot | null {
   const table = entry.state_snapshot?.table;
   if (!table || typeof table !== "object") {
     return null;
@@ -132,6 +138,23 @@ function tileToId(tile: string | null | undefined, occurrence: number) {
   }
   const copyOffset = [4, 13, 22].includes(kind) ? [1, 2, 3, 0][occurrence % 4] : occurrence % 4;
   return base + copyOffset;
+}
+
+function tileIdToTile(value: unknown) {
+  const tileId = Number(value);
+  if (!Number.isInteger(tileId) || tileId < 0 || tileId > 135) {
+    return null;
+  }
+
+  const kind = Math.floor(tileId / 4);
+  if (kind >= 27) {
+    return ["E", "S", "W", "N", "P", "F", "C"][kind - 27] ?? null;
+  }
+
+  const suit = ["m", "p", "s"][Math.floor(kind / 9)];
+  const rank = (kind % 9) + 1;
+  const isRedFive = [16, 52, 88].includes(tileId);
+  return `${rank}${suit}${isRedFive ? "r" : ""}`;
 }
 
 function tilesToIds(tiles: Array<string | null | undefined>) {
@@ -239,7 +262,10 @@ function buildFuros(melds: Meld[] | undefined, who: number) {
   return { furo, kuiInfo };
 }
 
-function buildReviewPayload(entry: ReviewEntry, targetPlayerLabel?: string | null): MahjongAiReviewPayload | null {
+function buildReviewPayload(
+  entry: MahjongAiTableEntry,
+  targetPlayerLabel?: string | null,
+): MahjongAiReviewPayload | null {
   const table = getTableSnapshot(entry);
   if (!table) {
     return null;
@@ -301,11 +327,24 @@ function buildReviewPayload(entry: ReviewEntry, targetPlayerLabel?: string | nul
 }
 
 type MahjongAiReviewFrameProps = {
-  entry: ReviewEntry;
+  entry: MahjongAiTableEntry;
   targetPlayerLabel?: string | null;
+  fitViewport?: boolean;
+  interactive?: boolean;
+  interactionDisabled?: boolean;
+  onTileSelect?: (tile: string) => void;
+  title?: string;
 };
 
-export function MahjongAiReviewFrame({ entry, targetPlayerLabel }: MahjongAiReviewFrameProps) {
+export function MahjongAiReviewFrame({
+  entry,
+  targetPlayerLabel,
+  fitViewport = false,
+  interactive = false,
+  interactionDisabled = false,
+  onTileSelect,
+  title = "MahjongLab 逐步复盘牌桌",
+}: MahjongAiReviewFrameProps) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const reviewPayload = useMemo(() => buildReviewPayload(entry, targetPlayerLabel), [entry, targetPlayerLabel]);
 
@@ -316,23 +355,41 @@ export function MahjongAiReviewFrame({ entry, targetPlayerLabel }: MahjongAiRevi
     iframeRef.current?.contentWindow?.postMessage(
       {
         type: "mahjonglab-review-snapshot",
-        payload: { ...reviewPayload, snapshotKey: entry.id },
+        payload: {
+          ...reviewPayload,
+          snapshotKey: entry.id,
+          interactive: interactive && !interactionDisabled,
+        },
       },
       window.location.origin,
     );
-  }, [entry.id, reviewPayload]);
+  }, [entry.id, interactionDisabled, interactive, reviewPayload]);
 
   useEffect(() => {
-    const handleReady = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin || event.data?.type !== "mahjonglab-review-ready") {
+    const handleFrameMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) {
         return;
       }
-      postSnapshot();
+      if (event.data?.type === "mahjonglab-review-ready") {
+        postSnapshot();
+        return;
+      }
+      if (
+        event.data?.type === "mahjonglab-training-tile-selected" &&
+        event.data?.payload?.snapshotKey === entry.id &&
+        interactive &&
+        !interactionDisabled
+      ) {
+        const tile = tileIdToTile(event.data?.payload?.tileId);
+        if (tile) {
+          onTileSelect?.(tile);
+        }
+      }
     };
 
-    window.addEventListener("message", handleReady);
-    return () => window.removeEventListener("message", handleReady);
-  }, [postSnapshot]);
+    window.addEventListener("message", handleFrameMessage);
+    return () => window.removeEventListener("message", handleFrameMessage);
+  }, [entry.id, interactionDisabled, interactive, onTileSelect, postSnapshot]);
 
   useEffect(() => {
     const timer = window.setTimeout(postSnapshot, 120);
@@ -340,15 +397,32 @@ export function MahjongAiReviewFrame({ entry, targetPlayerLabel }: MahjongAiRevi
   }, [postSnapshot]);
 
   if (!reviewPayload) {
-    return <ReviewMahjongTable entry={entry} targetPlayerLabel={targetPlayerLabel} />;
+    return (
+      <ReviewMahjongTable
+        entry={{
+          state_snapshot: entry.state_snapshot,
+          tiles_left: entry.tiles_left,
+          junme: entry.junme ?? 0,
+          is_match: entry.is_match ?? false,
+        }}
+        targetPlayerLabel={targetPlayerLabel}
+      />
+    );
   }
 
   return (
-    <div className="mx-auto aspect-square w-full max-w-[780px] overflow-hidden rounded-lg border border-slate-800 bg-black">
+    <div
+      className={[
+        "mx-auto aspect-square overflow-hidden rounded-lg border border-slate-800 bg-black",
+        fitViewport
+          ? "h-auto max-h-full w-full max-w-[780px] xl:h-full xl:w-auto xl:max-w-full"
+          : "w-full max-w-[780px]",
+      ].join(" ")}
+    >
       <iframe
         ref={iframeRef}
         src={FRAME_SRC}
-        title="MahjongLab 逐步复盘牌桌"
+        title={title}
         className="h-full w-full border-0 bg-black"
         onLoad={postSnapshot}
       />

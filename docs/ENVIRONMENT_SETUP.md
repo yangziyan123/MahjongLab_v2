@@ -165,7 +165,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 - `Tenhou` 原始牌谱下载
 - `mjai-reviewer --no-review --in-file` 转换 `mjai`
 - 使用缓存好的 `raw_input_object_key / normalized_mjai_object_key` 跑通 `process_review_job`
-- `majsoul_file -> review -> mistake_item` 主链路
+- `majsoul_file -> review` 主链路
 
 阶段 3 联调前确认：
 

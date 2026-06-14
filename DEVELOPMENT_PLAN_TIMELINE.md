@@ -249,7 +249,7 @@
 - 当前已落地一版“本地 MVP 形态”的复盘后端，代码位于 `services/api`
 - 已实装：
   - `FastAPI + SQLAlchemy`
-  - `inline_json / upload_file / internal_match`
+  - `inline_jsonl / upload_file / internal_match`（兼容旧 `inline_json`）
   - `review-jobs / reviews / uploads / dashboard / me`
   - 本地异步执行器
 - 当前未实装：
