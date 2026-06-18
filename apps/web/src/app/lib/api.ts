@@ -1,7 +1,8 @@
 import type {
+  ClassicGame,
+  ClassicTrainingSession,
   CreatePlaySessionRequest,
   CreateReviewJobRequest,
-  DashboardSummary,
   PaginatedPlayMatches,
   PlayMatch,
   PlaySession,
@@ -9,6 +10,9 @@ import type {
   PaginatedReviews,
   ReplaySourceOption,
   Review,
+  ReviewAssistantConversation,
+  ReviewAssistantMessage,
+  ReviewAssistantStreamHandlers,
   ReviewEntry,
   ReviewJob,
   ReviewJobResult,
@@ -74,6 +78,37 @@ export function getMe() {
   return apiRequest<UserProfile>("/api/me");
 }
 
+export async function listClassicGames() {
+  const payload = await apiRequest<{ items: ClassicGame[] }>("/api/classic-games");
+  return payload.items;
+}
+
+export function getClassicGame(gameId: string) {
+  return apiRequest<ClassicGame>(`/api/classic-games/${gameId}`);
+}
+
+export function createClassicTrainingSession(payload: {
+  game_id: string;
+  start_hand_index: number;
+  username: string;
+}) {
+  return apiRequest<ClassicTrainingSession>("/api/classic-training/sessions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getClassicTrainingSession(matchId: string) {
+  return apiRequest<ClassicTrainingSession>(`/api/classic-training/sessions/${matchId}`);
+}
+
+export function submitClassicTrainingAction(matchId: string, payload: { type: "dahai"; pai: string }) {
+  return apiRequest<ClassicTrainingSession>(`/api/classic-training/sessions/${matchId}/actions`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function getPlaySession() {
   return apiRequest<PlaySession | null>("/api/play/session");
 }
@@ -92,6 +127,8 @@ export function getPlayMatch(matchId: string) {
 export function listPlayMatches(params: {
   q?: string;
   status?: string;
+  match_type?: string;
+  date_range?: string;
   page?: number;
   page_size?: number;
 }) {
@@ -106,10 +143,6 @@ export function startPlayMatchReview(matchId: string) {
 
 export function getPlayMatchExportUrl(matchId: string) {
   return `/api/play/matches/${matchId}/export`;
-}
-
-export function getDashboardSummary() {
-  return apiRequest<DashboardSummary>("/api/dashboard/summary");
 }
 
 export async function listReplaySources() {
@@ -150,6 +183,7 @@ export function retryReviewJob(taskId: string) {
 export function listReviews(params: {
   q?: string;
   platform?: string;
+  date_range?: string;
   page?: number;
   page_size?: number;
 }) {
@@ -158,6 +192,15 @@ export function listReviews(params: {
 
 export function getReview(reviewId: string) {
   return apiRequest<Review>(`/api/reviews/${reviewId}`);
+}
+
+export function getReviewExportUrl(
+  reviewId: string,
+  anonymous?: boolean,
+) {
+  return `/api/reviews/${reviewId}/export${buildQuery({
+    anonymous: anonymous === undefined ? undefined : String(anonymous),
+  })}`;
 }
 
 export function listReviewEntries(params: {
@@ -203,4 +246,144 @@ export function deleteReview(reviewId: string) {
   return apiRequest<void>(`/api/reviews/${reviewId}`, {
     method: "DELETE",
   });
+}
+
+export function createReviewAssistantConversation(reviewId: string, entryId: number) {
+  return apiRequest<ReviewAssistantConversation>(
+    `/api/reviews/${reviewId}/entries/${entryId}/assistant/conversation`,
+    { method: "POST" },
+  );
+}
+
+export function getReviewAssistantConversation(conversationId: string) {
+  return apiRequest<ReviewAssistantConversation>(
+    `/api/review-assistant/conversations/${conversationId}`,
+  );
+}
+
+function dispatchAssistantEvent(
+  event: string,
+  data: string,
+  handlers: ReviewAssistantStreamHandlers,
+) {
+  const payload = JSON.parse(data);
+  if (event === "message.started") {
+    handlers.onStarted?.(payload);
+  } else if (event === "message.delta") {
+    handlers.onDelta?.(payload);
+  } else if (event === "message.completed") {
+    handlers.onCompleted?.(payload);
+  } else if (event === "message.failed") {
+    handlers.onFailed?.(payload);
+  }
+}
+
+async function readAssistantStream(
+  response: Response,
+  handlers: ReviewAssistantStreamHandlers,
+) {
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === "string") {
+        detail = payload.detail;
+      }
+    } catch {
+      // keep the HTTP status when the error body is not JSON
+    }
+    throw new ApiError(response.status, detail);
+  }
+  if (!response.body) {
+    throw new ApiError(502, "助手返回了空响应");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      let event = "";
+      let data = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event: ")) {
+          event = line.slice(7);
+        } else if (line.startsWith("data: ")) {
+          data += line.slice(6);
+        }
+      }
+      if (event && data) {
+        dispatchAssistantEvent(event, data, handlers);
+      }
+    }
+    if (done) {
+      break;
+    }
+  }
+  if (buffer.trim()) {
+    let event = "";
+    let data = "";
+    for (const line of buffer.split("\n")) {
+      if (line.startsWith("event: ")) {
+        event = line.slice(7);
+      } else if (line.startsWith("data: ")) {
+        data += line.slice(6);
+      }
+    }
+    if (event && data) {
+      dispatchAssistantEvent(event, data, handlers);
+    }
+  }
+}
+
+export async function streamReviewAssistantMessage(
+  conversationId: string,
+  payload: {
+    content: string;
+    client_request_id: string;
+  },
+  handlers: ReviewAssistantStreamHandlers,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(
+    `/api/review-assistant/conversations/${conversationId}/messages`,
+    {
+      method: "POST",
+      headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal,
+    },
+  );
+  return readAssistantStream(response, handlers);
+}
+
+export async function regenerateReviewAssistantMessage(
+  messageId: string,
+  handlers: ReviewAssistantStreamHandlers,
+  signal?: AbortSignal,
+) {
+  const response = await fetch(`/api/review-assistant/messages/${messageId}/regenerate`, {
+    method: "POST",
+    headers: { Accept: "text/event-stream" },
+    signal,
+  });
+  return readAssistantStream(response, handlers);
+}
+
+export function submitReviewAssistantFeedback(
+  messageId: string,
+  rating: "helpful" | "unhelpful" | "error",
+  reason?: string,
+) {
+  return apiRequest<{ message_id: string; rating: string; reason?: string | null }>(
+    `/api/review-assistant/messages/${messageId}/feedback`,
+    {
+      method: "POST",
+      body: JSON.stringify({ rating, reason }),
+    },
+  );
 }

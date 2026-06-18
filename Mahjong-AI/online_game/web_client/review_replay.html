@@ -42,6 +42,29 @@
             opacity: 0;
             transition: opacity 0.25s ease;
         }
+
+        #training-hand-controls {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .training-tile-control {
+            position: fixed;
+            border: 0;
+            border-radius: 5px;
+            background: transparent;
+            color: transparent;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+
+        .training-tile-control:hover,
+        .training-tile-control:focus-visible {
+            outline: 3px solid rgba(56, 189, 248, 0.95);
+            outline-offset: 2px;
+        }
     </style>
     <script>
         function alert(message) {
@@ -65,6 +88,7 @@
 </head>
 <body>
     <div id="notification-container"></div>
+    <div id="training-hand-controls" aria-label="可选择的手牌"></div>
     <div id="connecting-form">
         <input type="text" id="host" value="127.0.0.1" />
         <input type="text" id="port" value="8888" />
@@ -73,8 +97,8 @@
         <button id="connectBtn" type="button">connect</button>
     </div>
     <script src="js/src/phaser.min.js"></script>
-    <script src="js/src/render.js"></script>
+    <script src="js/src/render.js?v=20260613-training-table"></script>
     <script src="js/src/communication.js"></script>
-    <script src="js/src/review_replay.js"></script>
+    <script src="js/src/review_replay.js?v=20260613-training-table"></script>
 </body>
 </html>

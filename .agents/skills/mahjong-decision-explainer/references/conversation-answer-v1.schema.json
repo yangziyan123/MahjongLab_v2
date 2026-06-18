@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "conversation-answer.v1",
+      "default": "conversation-answer.v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "answer": {
+      "maxLength": 1200,
+      "minLength": 1,
+      "title": "Answer",
+      "type": "string"
+    },
+    "evidence_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 12,
+      "title": "Evidence Ids",
+      "type": "array"
+    },
+    "uncertainty_ids": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Uncertainty Ids",
+      "type": "array"
+    }
+  },
+  "required": [
+    "answer"
+  ],
+  "title": "ConversationAnswer",
+  "type": "object"
+}

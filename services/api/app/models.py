@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, SmallInteger, String, Text, UniqueConstraint
 from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,7 @@ class User(Base):
     review_jobs: Mapped[list["ReviewJob"]] = relationship(back_populates="user")
     reviews: Mapped[list["Review"]] = relationship(back_populates="user")
     matches: Mapped[list["Match"]] = relationship(back_populates="user")
+    review_conversations: Mapped[list["ReviewConversation"]] = relationship(back_populates="user")
 
 
 class Match(Base):
@@ -149,6 +150,10 @@ class Review(Base):
     match: Mapped[Match | None] = relationship(back_populates="reviews")
     job: Mapped[ReviewJob] = relationship(back_populates="review", foreign_keys=[job_id])
     entries: Mapped[list["ReviewEntry"]] = relationship(back_populates="review", cascade="all, delete-orphan")
+    conversations: Mapped[list["ReviewConversation"]] = relationship(
+        back_populates="review",
+        cascade="all, delete-orphan",
+    )
 
 
 class ReviewEntry(Base):
@@ -177,3 +182,91 @@ class ReviewEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     review: Mapped[Review] = relationship(back_populates="entries")
+    conversations: Mapped[list["ReviewConversation"]] = relationship(
+        back_populates="review_entry",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReviewConversation(Base):
+    __tablename__ = "review_conversations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "review_id", "review_entry_id", name="uq_review_conversation_entry"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("reviews.id"), nullable=False, index=True)
+    review_entry_id: Mapped[int] = mapped_column(ForeignKey("review_entries.id"), nullable=False, index=True)
+    context_version: Mapped[str] = mapped_column(Text, nullable=False, default="decision-context.v2")
+    context_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
+    user: Mapped[User] = relationship(back_populates="review_conversations")
+    review: Mapped[Review] = relationship(back_populates="conversations")
+    review_entry: Mapped[ReviewEntry] = relationship(back_populates="conversations")
+    messages: Mapped[list["ReviewMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ReviewMessage.created_at",
+    )
+
+
+class ReviewMessage(Base):
+    __tablename__ = "review_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("review_conversations.id"),
+        nullable=False,
+        index=True,
+    )
+    reply_to_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("review_messages.id"),
+        nullable=True,
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    content_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="completed")
+    model_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    client_request_id: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_token_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    conversation: Mapped[ReviewConversation] = relationship(back_populates="messages")
+    feedback: Mapped["ReviewMessageFeedback | None"] = relationship(
+        back_populates="message",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+
+
+class ReviewMessageFeedback(Base):
+    __tablename__ = "review_message_feedback"
+    __table_args__ = (UniqueConstraint("message_id", "user_id", name="uq_review_message_feedback_user"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    message_id: Mapped[str] = mapped_column(ForeignKey("review_messages.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    rating: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    message: Mapped[ReviewMessage] = relationship(back_populates="feedback")

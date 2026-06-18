@@ -82,7 +82,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 ```powershell
 cd apps\web
-![1778997596296](image/README/1778997596296.png)
+npm.cmd run dev
 ```
 
 访问：
@@ -157,5 +157,9 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 - `MAHJONGLAB_MAJSOUL_BROWSER_EXECUTABLE`
 - `MAHJONGLAB_MAJSOUL_BROWSER_USER_DATA_DIR`
 - `MAHJONGLAB_MAJSOUL_BROWSER_PROFILE`
+- `MAHJONGLAB_MAJSOUL_CAPTURE_TIMEOUT_SECONDS`（默认 `90`）
+
+导入器会复制指定浏览器配置文件的登录态，在无头浏览器中打开回放页，并监听新版 Unity 客户端的
+`fetchGameRecord` WebSocket 响应。浏览器配置文件必须已经登录雀魂；项目不会读取或保存雀魂账号密码。
 
 如果 AI 对战启动失败，确认 `MAHJONG_AI_ROOT`、`MAHJONG_AI_PYTHON`、`MAHJONG_AI_WEBSOCKIFY` 指向正确位置，默认会使用仓库根目录下的 `Mahjong-AI`。

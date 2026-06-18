@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,12 +10,6 @@ class UploadResponse(BaseModel):
     file_key: str
     filename: str
     size: int
-
-
-class DashboardSummary(BaseModel):
-    review_count: int
-    completed_job_count: int
-    failed_job_count: int
 
 
 class ReplaySourceOption(BaseModel):
@@ -33,7 +27,13 @@ class UserProfile(BaseModel):
 
 class CreatePlaySessionRequest(BaseModel):
     username: str = Field(min_length=1, max_length=8)
-    ai_level: str = Field(default="normal", pattern="^(normal|hard)$")
+    ai_level: Literal["normal", "hard"] = "normal"
+    match_type: Literal["tonpu", "hanchan"] = "hanchan"
+    seat: Literal["random", "east", "south", "west", "north"] = "random"
+    start_points: int = Field(default=25000, ge=10000, le=50000, multiple_of=100)
+    aka_dora: Literal[0, 3] = 3
+    kuitan: bool = True
+    allow_south_entry: bool = False
     ai_opponents: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -91,6 +91,95 @@ class PaginatedPlayMatches(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class ClassicGameHandOut(BaseModel):
+    index: int
+    label: str
+    scores: list[int] = Field(default_factory=list)
+    decision_count: int
+
+
+class ClassicGameOut(BaseModel):
+    id: str
+    title: str
+    subtitle: str
+    source: str
+    year: int
+    match_type: str
+    players: list[str]
+    tags: list[str]
+    summary: str
+    hand_count: int
+    decision_count: int
+    hands: list[ClassicGameHandOut] = Field(default_factory=list)
+
+
+class CreateClassicTrainingSessionRequest(BaseModel):
+    game_id: str = Field(min_length=1, max_length=80)
+    start_hand_index: int = Field(default=0, ge=0)
+    username: str = Field(default="训练玩家", min_length=1, max_length=8)
+
+
+class ClassicTrainingActionRequest(BaseModel):
+    type: Literal["dahai"]
+    pai: str = Field(min_length=1, max_length=4)
+
+
+class ClassicTrainingDecisionOut(BaseModel):
+    decision_index: int
+    total_decisions: int
+    hand_index: int
+    hand_label: str
+    turn: int
+    action_type: str
+    state_snapshot: dict[str, Any]
+    options: list[dict[str, Any]]
+
+
+class ClassicTrainingComparisonOut(BaseModel):
+    decision_index: int
+    hand_index: int
+    hand_label: str
+    turn: int
+    actual_action: dict[str, Any]
+    original_action: dict[str, Any]
+    is_same: bool
+
+
+class ClassicTrainingHandSummaryOut(BaseModel):
+    hand_index: int
+    hand_label: str
+    decision_count: int
+    same_count: int
+    different_count: int
+    agreement_rate: float
+
+
+class ClassicTrainingComparisonSummaryOut(BaseModel):
+    decision_count: int
+    same_count: int
+    different_count: int
+    agreement_rate: float
+    route_label: str
+    route_description: str
+    hands: list[ClassicTrainingHandSummaryOut] = Field(default_factory=list)
+
+
+class ClassicTrainingSessionOut(BaseModel):
+    match_id: str
+    status: str
+    username: str
+    game: ClassicGameOut
+    start_hand_index: int
+    answered_count: int
+    total_decisions: int
+    current_decision: ClassicTrainingDecisionOut | None = None
+    history: list[ClassicTrainingComparisonOut] = Field(default_factory=list)
+    comparison_summary: ClassicTrainingComparisonSummaryOut | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class CreateReviewJobRequest(BaseModel):
@@ -195,3 +284,47 @@ class PaginatedReviewEntries(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class ReviewAssistantMessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    status: str
+    model_provider: str | None = None
+    model_name: str | None = None
+    prompt_version: str | None = None
+    context_hash: str
+    latency_ms: int | None = None
+    created_at: datetime
+    feedback: str | None = None
+    sources: dict[str, Any] | None = None
+    explanation: dict[str, Any] | None = None
+
+
+class ReviewAssistantConversationOut(BaseModel):
+    id: str
+    review_id: str
+    entry_id: int
+    context_version: str
+    context_hash: str
+    title: str
+    provider_mode: str
+    messages: list[ReviewAssistantMessageOut] = Field(default_factory=list)
+    suggested_questions: list[str] = Field(default_factory=list)
+
+
+class ReviewAssistantMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+    client_request_id: str = Field(min_length=1, max_length=64)
+
+
+class ReviewAssistantFeedbackRequest(BaseModel):
+    rating: str = Field(pattern="^(helpful|unhelpful|error)$")
+    reason: str | None = Field(default=None, max_length=100)
+
+
+class ReviewAssistantFeedbackOut(BaseModel):
+    message_id: str
+    rating: str
+    reason: str | None = None

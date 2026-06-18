@@ -1,11 +1,20 @@
-import { useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Eye, FileSearch, LoaderCircle, PlayCircle, Search, Trophy } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 
 import { ApiError, listPlayMatches, startPlayMatchReview } from "../../lib/api";
 import { formatDateTime } from "../../lib/format";
-import { formatMatchType, formatReviewJobStatus, formatSignedPoints, formatTrainingHistoryStatus, getPlayerScoreRow } from "../../lib/play";
+import {
+  formatMatchType,
+  formatReviewJobStatus,
+  formatSignedPoints,
+  formatTrainingHistoryStatus,
+  getClassicTrainingUrl,
+  getPlayConfigUrl,
+  getPlayerScoreRow,
+  isClassicTrainingMatch,
+} from "../../lib/play";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -14,68 +23,51 @@ import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import type { PlayMatch } from "../../lib/types";
 
-function isWithinTimeFilter(match: PlayMatch, filter: string) {
-  if (filter === "all") {
-    return true;
-  }
-  const updatedAt = new Date(match.updated_at);
-  if (Number.isNaN(updatedAt.getTime())) {
-    return false;
-  }
-  const now = Date.now();
-  const age = now - updatedAt.getTime();
-  if (filter === "today") {
-    return age <= 24 * 60 * 60 * 1000;
-  }
-  if (filter === "week") {
-    return age <= 7 * 24 * 60 * 60 * 1000;
-  }
-  if (filter === "month") {
-    return age <= 30 * 24 * 60 * 60 * 1000;
-  }
-  return true;
-}
-
 export function PlayHistory() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [ruleFilter, setRuleFilter] = useState("all");
   const [timeFilter, setTimeFilter] = useState("all");
+  const [page, setPage] = useState(1);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [pendingReviewMatchId, setPendingReviewMatchId] = useState<string | null>(null);
+  const deferredSearch = useDeferredValue(search.trim());
+  const pageSize = 10;
 
   const matchesQuery = useQuery({
-    queryKey: ["play-matches", search, statusFilter],
+    queryKey: ["play-matches", deferredSearch, statusFilter, ruleFilter, timeFilter, page],
     queryFn: () =>
       listPlayMatches({
-        q: search.trim() || undefined,
+        q: deferredSearch || undefined,
         status: statusFilter === "all" ? undefined : statusFilter,
-        page: 1,
-        page_size: 100,
+        match_type: ruleFilter === "all" ? undefined : ruleFilter,
+        date_range: timeFilter,
+        page,
+        page_size: pageSize,
       }),
   });
 
   const matches = matchesQuery.data?.items ?? [];
-  const filteredMatches = useMemo(() => {
-    return matches.filter((match) => {
-      if (ruleFilter !== "all" && match.match_type !== ruleFilter) {
-        return false;
-      }
-      return isWithinTimeFilter(match, timeFilter);
-    });
-  }, [matches, ruleFilter, timeFilter]);
+  const total = matchesQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const summary = useMemo(() => {
-    const playerRows = filteredMatches.map(getPlayerScoreRow).filter(Boolean);
-    const completedCount = filteredMatches.filter((match) => match.status === "completed").length;
-    const reviewableCount = filteredMatches.filter((match) => match.reviewable_event_count > 0).length;
+    const playerRows = matches.map(getPlayerScoreRow).filter(Boolean);
+    const completedCount = matches.filter((match) => match.status === "completed").length;
+    const reviewableCount = matches.filter((match) => match.reviewable_event_count > 0).length;
     const rankedRows = playerRows.filter((row) => row?.rank !== undefined);
     const avgRank = rankedRows.length
       ? rankedRows.reduce((total, row) => total + (row?.rank ?? 0), 0) / rankedRows.length
       : undefined;
     return { completedCount, reviewableCount, avgRank };
-  }, [filteredMatches]);
+  }, [matches]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const handleStartReview = async (match: PlayMatch) => {
     setPendingReviewMatchId(match.id);
@@ -135,20 +127,20 @@ export function PlayHistory() {
           <div className="grid gap-4 md:grid-cols-4">
             <Card>
               <CardContent className="pt-6 text-center">
-                <div className="text-3xl font-bold text-slate-900">{filteredMatches.length}</div>
-                <div className="mt-1 text-sm text-slate-600">训练记录</div>
+                <div className="text-3xl font-bold text-slate-900">{total}</div>
+                <div className="mt-1 text-sm text-slate-600">筛选结果</div>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6 text-center">
                 <div className="text-3xl font-bold text-slate-900">{summary.completedCount}</div>
-                <div className="mt-1 text-sm text-slate-600">已完成</div>
+                <div className="mt-1 text-sm text-slate-600">本页已完成</div>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6 text-center">
                 <div className="text-3xl font-bold text-emerald-700">{summary.reviewableCount}</div>
-                <div className="mt-1 text-sm text-slate-600">可复盘</div>
+                <div className="mt-1 text-sm text-slate-600">本页可复盘</div>
               </CardContent>
             </Card>
             <Card>
@@ -156,7 +148,7 @@ export function PlayHistory() {
                 <div className="text-3xl font-bold text-slate-900">
                   {summary.avgRank === undefined ? "-" : summary.avgRank.toFixed(1)}
                 </div>
-                <div className="mt-1 text-sm text-slate-600">平均排名</div>
+                <div className="mt-1 text-sm text-slate-600">本页平均排名</div>
               </CardContent>
             </Card>
           </div>
@@ -168,12 +160,21 @@ export function PlayHistory() {
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <Input
                     value={search}
-                    onChange={(event) => setSearch(event.target.value)}
+                    onChange={(event) => {
+                      setSearch(event.target.value);
+                      setPage(1);
+                    }}
                     placeholder="搜索对局 ID 或用户名"
                     className="pl-10"
                   />
                 </div>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) => {
+                    setStatusFilter(value);
+                    setPage(1);
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="状态" />
                   </SelectTrigger>
@@ -184,7 +185,13 @@ export function PlayHistory() {
                     <SelectItem value="failed">失败</SelectItem>
                   </SelectContent>
                 </Select>
-                <Select value={ruleFilter} onValueChange={setRuleFilter}>
+                <Select
+                  value={ruleFilter}
+                  onValueChange={(value) => {
+                    setRuleFilter(value);
+                    setPage(1);
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="规则" />
                   </SelectTrigger>
@@ -194,7 +201,13 @@ export function PlayHistory() {
                     <SelectItem value="hanchan">半庄战</SelectItem>
                   </SelectContent>
                 </Select>
-                <Select value={timeFilter} onValueChange={setTimeFilter}>
+                <Select
+                  value={timeFilter}
+                  onValueChange={(value) => {
+                    setTimeFilter(value);
+                    setPage(1);
+                  }}
+                >
                   <SelectTrigger>
                     <SelectValue placeholder="时间" />
                   </SelectTrigger>
@@ -230,7 +243,7 @@ export function PlayHistory() {
                 <div className="rounded-lg bg-red-50 p-4 text-sm text-red-700">
                   {matchesQuery.error instanceof ApiError ? matchesQuery.error.detail : "训练记录读取失败。"}
                 </div>
-              ) : filteredMatches.length === 0 ? (
+              ) : matches.length === 0 ? (
                 <div className="py-12 text-center">
                   <PlayCircle className="mx-auto mb-4 h-12 w-12 text-slate-300" />
                   <h3 className="text-lg font-semibold text-slate-900">暂无训练记录</h3>
@@ -240,8 +253,9 @@ export function PlayHistory() {
                   </Button>
                 </div>
               ) : (
-                filteredMatches.map((match) => {
+                matches.map((match) => {
                   const playerRow = getPlayerScoreRow(match);
+                  const isClassic = isClassicTrainingMatch(match);
                   const reviewLabel = match.latest_review_job
                     ? formatReviewJobStatus(match.latest_review_job.status)
                     : match.reviewable_event_count > 0
@@ -260,6 +274,7 @@ export function PlayHistory() {
                             <Badge variant={match.status === "completed" ? "default" : "secondary"}>
                               {formatTrainingHistoryStatus(match.status)}
                             </Badge>
+                            {isClassic ? <Badge variant="outline">经典牌谱</Badge> : null}
                             {playerRow?.rank ? <Badge variant="outline">第 {playerRow.rank} 位</Badge> : null}
                             <span className={playerRow?.delta && playerRow.delta < 0 ? "font-bold text-rose-600" : "font-bold text-emerald-700"}>
                               {formatSignedPoints(playerRow?.delta)}
@@ -289,6 +304,12 @@ export function PlayHistory() {
 
                         <div className="flex flex-wrap gap-2 lg:justify-end">
                           <Button asChild variant="outline" size="sm">
+                            <Link to={isClassic ? getClassicTrainingUrl(match) : getPlayConfigUrl(match)}>
+                              <PlayCircle className="mr-2 h-4 w-4" />
+                              {isClassic ? "重新训练" : "再来一局"}
+                            </Link>
+                          </Button>
+                          <Button asChild variant="outline" size="sm">
                             <Link to={`/play/result/${match.id}`}>
                               <Eye className="mr-2 h-4 w-4" />
                               查看结果
@@ -315,6 +336,25 @@ export function PlayHistory() {
               )}
             </CardContent>
           </Card>
+
+          {total > pageSize ? (
+            <div className="flex items-center justify-center gap-2">
+              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+                上一页
+              </Button>
+              <div className="rounded-md border bg-white px-4 py-2 text-sm text-slate-600">
+                第 {page} / {totalPages} 页，共 {total} 局
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages}
+                onClick={() => setPage(page + 1)}
+              >
+                下一页
+              </Button>
+            </div>
+          ) : null}
         </div>
       </main>
     </div>

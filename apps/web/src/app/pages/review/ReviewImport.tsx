@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, FileJson, Hash, Link as LinkIcon, Upload } from "lucide-react";
+import { ArrowLeft, FileJson, Hash, Link as LinkIcon, Upload } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -14,35 +14,53 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Textarea } from "../../components/ui/textarea";
 
-type ImportType = "tenhou" | "majsoul" | "file" | "json";
+type ImportType = "tenhou" | "file" | "json";
 type TenhouImportType = "link" | "id";
-type MajsoulImportType = "file" | "url";
 
-function normalizeInlineJson(value: string) {
+function eventsToJsonl(events: unknown[]) {
+  if (
+    events.length === 0
+    || events.some((event) => !event || typeof event !== "object" || Array.isArray(event))
+  ) {
+    throw new Error("事件列表必须包含至少一个 JSON 对象。");
+  }
+  return events.map((event) => JSON.stringify(event)).join("\n");
+}
+
+function normalizeInlineJsonl(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
-    throw new Error("请先输入 JSON 内容。");
+    throw new Error("请先输入 JSONL 内容。");
   }
 
   try {
     const parsed = JSON.parse(trimmed) as unknown;
     if (Array.isArray(parsed)) {
-      return { events: parsed };
+      return { jsonl: eventsToJsonl(parsed) };
     }
     if (parsed && typeof parsed === "object" && Array.isArray((parsed as { events?: unknown[] }).events)) {
-      return { events: (parsed as { events: unknown[] }).events };
+      return { jsonl: eventsToJsonl((parsed as { events: unknown[] }).events) };
     }
-    throw new Error("JSON 需要是事件数组，或包含 events 数组的对象。");
+    if (parsed && typeof parsed === "object") {
+      return { jsonl: JSON.stringify(parsed) };
+    }
+    throw new Error("JSONL 的每一行都必须是事件对象。");
   } catch (error) {
     const lines = trimmed
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
-    if (lines.length > 1) {
-      lines.forEach((line) => JSON.parse(line));
+    try {
+      lines.forEach((line) => {
+        const event = JSON.parse(line) as unknown;
+        if (!event || typeof event !== "object" || Array.isArray(event)) {
+          throw new Error("JSONL 的每一行都必须是事件对象。");
+        }
+      });
       return { jsonl: lines.join("\n") };
+    } catch {
+      throw error instanceof Error ? error : new Error("无法解析 JSONL 内容。");
     }
-    throw error instanceof Error ? error : new Error("无法解析 JSON 内容。");
   }
 }
 
@@ -52,17 +70,12 @@ export function ReviewImport() {
 
   const [importType, setImportType] = useState<ImportType>("file");
   const [tenhouImportType, setTenhouImportType] = useState<TenhouImportType>("link");
-  const [majsoulImportType, setMajsoulImportType] = useState<MajsoulImportType>("file");
   const [selectedPlayer, setSelectedPlayer] = useState("auto");
-  const [language, setLanguage] = useState("zh-CN");
-  const [outputFormat, setOutputFormat] = useState("json");
   const [anonymous, setAnonymous] = useState(false);
   const [tenhouUrl, setTenhouUrl] = useState("");
   const [tenhouId, setTenhouId] = useState("");
-  const [majsoulUrl, setMajsoulUrl] = useState("");
   const [jsonContent, setJsonContent] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [majsoulFile, setMajsoulFile] = useState<File | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const sourcesQuery = useQuery({
@@ -90,22 +103,10 @@ export function ReviewImport() {
     }
   }, [enabledSources, tenhouImportType]);
 
-  useEffect(() => {
-    if (majsoulImportType === "file" && !enabledSources.has("majsoul_file") && enabledSources.has("majsoul_url")) {
-      setMajsoulImportType("url");
-      return;
-    }
-
-    if (majsoulImportType === "url" && !enabledSources.has("majsoul_url") && enabledSources.has("majsoul_file")) {
-      setMajsoulImportType("file");
-    }
-  }, [enabledSources, majsoulImportType]);
-
   const createMutation = useMutation({
     mutationFn: async () => {
       const options = {
-        lang: language,
-        output_format: outputFormat,
+        lang: "zh-CN",
         anonymous,
       };
       const targetPlayerRef = selectedPlayer === "auto" ? undefined : selectedPlayer;
@@ -156,47 +157,10 @@ export function ReviewImport() {
         });
       }
 
-      if (importType === "majsoul") {
-        if (selectedPlayer === "auto") {
-          throw new Error("雀魂导入暂不支持自动识别目标玩家，请手动选择玩家座位。");
-        }
-
-        if (majsoulImportType === "url") {
-          if (!enabledSources.has("majsoul_url")) {
-            throw new Error("所选导入方式暂不可用。");
-          }
-          if (!majsoulUrl.trim()) {
-            throw new Error("请输入雀魂牌谱链接。");
-          }
-          return createReviewJob({
-            source_type: "majsoul_url",
-            platform: "majsoul",
-            source: { url: majsoulUrl.trim() },
-            options,
-            target_player_ref: selectedPlayer,
-          });
-        }
-
-        if (!enabledSources.has("majsoul_file")) {
-          throw new Error("所选导入方式暂不可用。");
-        }
-        if (!majsoulFile) {
-          throw new Error("请先选择雀魂导出文件。");
-        }
-        const upload = await uploadReplayFile(majsoulFile);
-        return createReviewJob({
-          source_type: "majsoul_file",
-          platform: "majsoul",
-          source: { file_key: upload.file_key },
-          options,
-          target_player_ref: selectedPlayer,
-        });
-      }
-
       if (importType === "json") {
-        const source = normalizeInlineJson(jsonContent);
+        const source = normalizeInlineJsonl(jsonContent);
         return createReviewJob({
-          source_type: "inline_json",
+          source_type: "inline_jsonl",
           platform: "internal",
           source,
           options,
@@ -233,7 +197,6 @@ export function ReviewImport() {
   };
 
   const recentReviews = recentReviewsQuery.data?.items ?? [];
-  const isMajsoulImport = importType === "majsoul";
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -257,19 +220,15 @@ export function ReviewImport() {
           <Card>
             <CardHeader>
               <CardTitle>导入牌谱</CardTitle>
-              <CardDescription>支持 Tenhou（链接 / ID）、Majsoul（导出文件 / 链接）、mjai 文件和 JSON 导入。</CardDescription>
+              <CardDescription>支持 Tenhou（链接 / ID）、mjai 文件和 JSON 导入。</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-6">
                 <Tabs value={importType} onValueChange={(value) => setImportType(value as ImportType)}>
-                  <TabsList className="grid w-full grid-cols-4">
+                  <TabsList className="grid w-full grid-cols-3">
                     <TabsTrigger value="tenhou">
                       <LinkIcon className="mr-2 h-4 w-4" />
                       Tenhou
-                    </TabsTrigger>
-                    <TabsTrigger value="majsoul">
-                      <Download className="mr-2 h-4 w-4" />
-                      雀魂
                     </TabsTrigger>
                     <TabsTrigger value="file">
                       <Upload className="mr-2 h-4 w-4" />
@@ -330,83 +289,6 @@ export function ReviewImport() {
                     </Tabs>
                   </TabsContent>
 
-                  <TabsContent value="majsoul" className="space-y-4">
-                    <Tabs
-                      value={majsoulImportType}
-                      onValueChange={(value) => setMajsoulImportType(value as MajsoulImportType)}
-                      className="gap-4"
-                    >
-                      <TabsList className="grid w-full grid-cols-2">
-                        <TabsTrigger value="file" disabled={!enabledSources.has("majsoul_file")}>
-                          <Download className="mr-2 h-4 w-4" />
-                          导出文件
-                        </TabsTrigger>
-                        <TabsTrigger value="url" disabled={!enabledSources.has("majsoul_url")}>
-                          <LinkIcon className="mr-2 h-4 w-4" />
-                          链接
-                        </TabsTrigger>
-                      </TabsList>
-
-                      <TabsContent value="file" className="space-y-4">
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
-                          <div className="flex items-start gap-3">
-                            <div className="rounded-lg bg-white p-3 shadow-sm">
-                              <Download className="h-6 w-6 text-slate-600" />
-                            </div>
-                            <div className="flex-1 space-y-3">
-                              <div>
-                                <Label htmlFor="majsoul-file">雀魂导出文件</Label>
-                                <Input
-                                  id="majsoul-file"
-                                  type="file"
-                                  className="mt-2"
-                                  onChange={(event) => setMajsoulFile(event.target.files?.[0] ?? null)}
-                                />
-                              </div>
-                              <p className="text-sm text-slate-500">
-                                当前支持上传通过浏览器脚本或 Majsoul+ “Save logs” 导出的对局文件，再由后端转换为 `mjai`。
-                              </p>
-                              <p className="text-sm text-amber-700">这个入口需要明确选择目标玩家座位，不能自动识别。</p>
-                              {majsoulFile && (
-                                <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                                  已选择：
-                                  <span className="ml-2 font-semibold text-slate-900">{majsoulFile.name}</span>
-                                  <span className="ml-2 text-slate-500">{formatRelativeSize(majsoulFile.size)}</span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="url" className="space-y-4">
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
-                          <div className="flex items-start gap-3">
-                            <div className="rounded-lg bg-white p-3 shadow-sm">
-                              <LinkIcon className="h-6 w-6 text-slate-600" />
-                            </div>
-                            <div className="flex-1 space-y-3">
-                              <div>
-                                <Label htmlFor="majsoul-url">雀魂牌谱链接</Label>
-                                <Input
-                                  id="majsoul-url"
-                                  placeholder="https://game.maj-soul.com/1/?paipu=..."
-                                  className="mt-2"
-                                  value={majsoulUrl}
-                                  onChange={(event) => setMajsoulUrl(event.target.value)}
-                                />
-                              </div>
-                              <p className="text-sm text-slate-500">
-                                需要粘贴带 `paipu` 参数的雀魂回放页面链接。后端会复用你本机已登录的 Chrome / Edge 会话抓取牌谱，再转换为 `mjai`。
-                              </p>
-                              <p className="text-sm text-amber-700">这个入口同样需要手动指定目标玩家座位，当前不会自动识别。</p>
-                            </div>
-                          </div>
-                        </div>
-                      </TabsContent>
-                    </Tabs>
-                  </TabsContent>
-
                   <TabsContent value="file" className="space-y-4">
                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-6">
                       <div className="flex items-start gap-3">
@@ -419,12 +301,13 @@ export function ReviewImport() {
                             <Input
                               id="review-file"
                               type="file"
+                              accept=".jsonl,.json,application/x-ndjson,application/json"
                               className="mt-2"
                               onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
                             />
                           </div>
                           <p className="text-sm text-slate-500">
-                            当前推荐上传平台内导出的 `mjai` JSON / JSONL 文件，或其他已经标准化的 `mjai` 事件文件。
+                            推荐上传平台导出的 `mjai JSONL` 文件。旧版 JSON 事件数组仍可兼容，导入后会统一转换为 JSONL。
                           </p>
                           {selectedFile && (
                             <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
@@ -440,15 +323,17 @@ export function ReviewImport() {
 
                   <TabsContent value="json" className="space-y-4">
                     <div>
-                      <Label htmlFor="json">JSON 或 JSONL 数据</Label>
+                      <Label htmlFor="json">JSONL 数据</Label>
                       <Textarea
                         id="json"
                         className="mt-2 min-h-[260px] font-mono text-sm"
-                        placeholder='[{"type":"start_kyoku", ...}, {"type":"tsumo", ...}]'
+                        placeholder={'{"type":"start_kyoku", ...}\n{"type":"tsumo", ...}'}
                         value={jsonContent}
                         onChange={(event) => setJsonContent(event.target.value)}
                       />
-                      <p className="mt-2 text-sm text-slate-500">支持 `mjai` 事件数组，或逐行 JSON 的 `JSONL`。</p>
+                      <p className="mt-2 text-sm text-slate-500">
+                        每行一个 `mjai` 事件对象。旧版 JSON 事件数组会自动转换为 JSONL。
+                      </p>
                     </div>
                   </TabsContent>
                 </Tabs>
@@ -468,40 +353,9 @@ export function ReviewImport() {
                         <SelectItem value="3">玩家 3</SelectItem>
                       </SelectContent>
                     </Select>
-                    {isMajsoulImport && (
-                      <p className="mt-2 text-sm text-amber-700">雀魂导入必须手动指定目标玩家座位。</p>
-                    )}
                   </div>
 
-                  <div>
-                    <Label htmlFor="language">语言</Label>
-                    <Select value={language} onValueChange={setLanguage}>
-                      <SelectTrigger className="mt-2">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="zh-CN">简体中文</SelectItem>
-                        <SelectItem value="ja-JP">日本語</SelectItem>
-                        <SelectItem value="en-US">English</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="output">输出格式</Label>
-                    <Select value={outputFormat} onValueChange={setOutputFormat}>
-                      <SelectTrigger className="mt-2">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="json">JSON 数据</SelectItem>
-                        <SelectItem value="html">HTML 报告</SelectItem>
-                        <SelectItem value="both">两者都要</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="flex items-end">
+                  <div className="flex items-end md:col-span-1">
                     <div className="flex items-center space-x-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                       <Checkbox
                         id="anonymous"
@@ -509,7 +363,7 @@ export function ReviewImport() {
                         onCheckedChange={(checked) => setAnonymous(Boolean(checked))}
                       />
                       <Label htmlFor="anonymous" className="cursor-pointer">
-                        匿名化处理
+                        导出时默认匿名化
                       </Label>
                     </div>
                   </div>

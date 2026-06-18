@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import PlainTextResponse
@@ -10,15 +12,28 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.orm import Session
 
+from .classic_games import (
+    CLASSIC_GAMES,
+    ClassicTrainingError,
+    create_classic_training_session,
+    get_classic_game,
+    serialize_classic_game,
+    serialize_classic_training_session,
+    submit_classic_training_action,
+)
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
 from .jobs import enqueue_review_job
 from .models import Match, MatchEvent, Review, ReviewEntry, ReviewJob, User
 from .play_launcher import MahjongAiLauncher
+from .review_assistant.routes import router as review_assistant_router
 from .schemas import (
     CreatePlaySessionRequest,
+    CreateClassicTrainingSessionRequest,
+    ClassicGameOut,
+    ClassicTrainingActionRequest,
+    ClassicTrainingSessionOut,
     CreateReviewJobRequest,
-    DashboardSummary,
     PaginatedPlayMatches,
     PlayMatchOut,
     PlaySessionOut,
@@ -34,6 +49,7 @@ from .schemas import (
 )
 
 app = FastAPI(title="MahjongLab API", version="0.1.0")
+app.include_router(review_assistant_router)
 play_launcher = MahjongAiLauncher(settings)
 
 mahjong_ai_web_client_dir = settings.mahjong_ai_root / "online_game" / "web_client"
@@ -255,6 +271,27 @@ def serialize_entry(entry: ReviewEntry) -> ReviewEntryOut:
         created_at=entry.created_at,
     )
 
+
+def build_review_export_payload(
+    db: Session,
+    review: Review,
+    *,
+    anonymous: bool,
+) -> dict:
+    review_payload = serialize_review(review).model_dump(mode="json")
+    if anonymous:
+        review_payload["target_player_label"] = "匿名玩家"
+    entries = db.scalars(
+        select(ReviewEntry).where(ReviewEntry.review_id == review.id).order_by(ReviewEntry.seq.asc()),
+    ).all()
+    return {
+        "schema_version": "mahjonglab.review-export.v1",
+        "anonymous": anonymous,
+        "review": review_payload,
+        "entries": [serialize_entry(entry).model_dump(mode="json") for entry in entries],
+    }
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     settings.ensure_dirs()
@@ -277,6 +314,78 @@ def get_me(db: Session = Depends(get_db)) -> UserProfile:
     return UserProfile(id=user.id, display_name=user.display_name, locale=user.locale, timezone=user.timezone)
 
 
+@app.get("/api/classic-games", response_model=dict[str, list[ClassicGameOut]], response_model_by_alias=False)
+def list_classic_games() -> dict[str, list[dict]]:
+    return {"items": [serialize_classic_game(game) for game in CLASSIC_GAMES]}
+
+
+@app.get("/api/classic-games/{game_id}", response_model=ClassicGameOut, response_model_by_alias=False)
+def get_classic_game_detail(game_id: str) -> dict:
+    game = get_classic_game(game_id)
+    if game is None:
+        raise HTTPException(status_code=404, detail="经典牌谱不存在")
+    return serialize_classic_game(game)
+
+
+@app.post(
+    "/api/classic-training/sessions",
+    response_model=ClassicTrainingSessionOut,
+    status_code=status.HTTP_201_CREATED,
+    response_model_by_alias=False,
+)
+def create_classic_training(
+    payload: CreateClassicTrainingSessionRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    user = get_or_create_default_user(db)
+    try:
+        match = create_classic_training_session(
+            db,
+            user=user,
+            game_id=payload.game_id,
+            start_hand_index=payload.start_hand_index,
+            username=payload.username,
+        )
+        return serialize_classic_training_session(db, match)
+    except ClassicTrainingError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@app.get(
+    "/api/classic-training/sessions/{match_id}",
+    response_model=ClassicTrainingSessionOut,
+    response_model_by_alias=False,
+)
+def get_classic_training(match_id: str, db: Session = Depends(get_db)) -> dict:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="经典训练会话不存在")
+    try:
+        return serialize_classic_training_session(db, match)
+    except ClassicTrainingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post(
+    "/api/classic-training/sessions/{match_id}/actions",
+    response_model=ClassicTrainingSessionOut,
+    response_model_by_alias=False,
+)
+def submit_classic_training_choice(
+    match_id: str,
+    payload: ClassicTrainingActionRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    match = db.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail="经典训练会话不存在")
+    try:
+        updated_match = submit_classic_training_action(db, match=match, action=payload.model_dump())
+        return serialize_classic_training_session(db, updated_match)
+    except ClassicTrainingError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
 @app.get("/api/play/session", response_model=PlaySessionOut | None, response_model_by_alias=False)
 def get_play_session() -> PlaySessionOut | None:
     return play_launcher.get_status()
@@ -285,7 +394,17 @@ def get_play_session() -> PlaySessionOut | None:
 @app.post("/api/play/session", response_model=PlaySessionOut, response_model_by_alias=False)
 def create_play_session(payload: CreatePlaySessionRequest) -> PlaySessionOut:
     try:
-        return play_launcher.ensure_running(payload.username, payload.ai_level, payload.ai_opponents)
+        return play_launcher.ensure_running(
+            username=payload.username,
+            ai_level=payload.ai_level,
+            match_type=payload.match_type,
+            seat=payload.seat,
+            start_points=payload.start_points,
+            aka_dora=payload.aka_dora,
+            kuitan=payload.kuitan,
+            allow_south_entry=payload.allow_south_entry,
+            ai_opponents=payload.ai_opponents,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -294,6 +413,8 @@ def create_play_session(payload: CreatePlaySessionRequest) -> PlaySessionOut:
 def list_play_matches(
     q: str | None = Query(default=None),
     status_filter: str | None = Query(default=None, alias="status"),
+    match_type: Literal["tonpu", "hanchan"] | None = None,
+    date_range: Literal["all", "today", "week", "month"] = "all",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -317,6 +438,11 @@ def list_play_matches(
             )
         else:
             stmt = stmt.where(Match.status == status_filter)
+    if match_type and match_type != "all":
+        stmt = stmt.where(Match.match_type == match_type)
+    if date_range != "all":
+        range_days = {"today": 1, "week": 7, "month": 30}[date_range]
+        stmt = stmt.where(Match.updated_at >= utcnow() - timedelta(days=range_days))
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(Match.id.ilike(like), cast(Match.source_json, String).ilike(like)))
@@ -403,29 +529,15 @@ def export_play_match(match_id: str) -> PlainTextResponse:
     )
 
 
-@app.get("/api/dashboard/summary", response_model=DashboardSummary, response_model_by_alias=False)
-def get_dashboard_summary(db: Session = Depends(get_db)) -> DashboardSummary:
-    review_count = db.scalar(select(func.count(Review.id))) or 0
-    completed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "completed")) or 0
-    failed_job_count = db.scalar(select(func.count(ReviewJob.id)).where(ReviewJob.status == "failed")) or 0
-    return DashboardSummary(
-        review_count=int(review_count),
-        completed_job_count=int(completed_job_count),
-        failed_job_count=int(failed_job_count),
-    )
-
-
 @app.get("/api/platforms/replay-sources", response_model=dict[str, list[ReplaySourceOption]], response_model_by_alias=False)
 def list_replay_sources() -> dict[str, list[ReplaySourceOption]]:
     return {
         "items": [
             ReplaySourceOption(key="internal_match", label="平台内对局", enabled=True),
             ReplaySourceOption(key="upload_file", label="文件上传", enabled=True),
-            ReplaySourceOption(key="inline_json", label="JSON 数据", enabled=True),
+            ReplaySourceOption(key="inline_jsonl", label="JSONL 数据", enabled=True),
             ReplaySourceOption(key="tenhou_url", label="天凤链接", enabled=True),
             ReplaySourceOption(key="tenhou_id", label="天凤 ID", enabled=True),
-            ReplaySourceOption(key="majsoul_file", label="雀魂导出文件", enabled=True),
-            ReplaySourceOption(key="majsoul_url", label="雀魂链接", enabled=True),
         ]
     }
 
@@ -526,6 +638,7 @@ def retry_review_job(task_id: str, db: Session = Depends(get_db)) -> ReviewJobOu
 def list_reviews(
     q: str | None = Query(default=None),
     platform: str | None = Query(default=None),
+    date_range: Literal["all", "today", "week", "month"] = "all",
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -533,6 +646,9 @@ def list_reviews(
     stmt = select(Review)
     if platform and platform != "all":
         stmt = stmt.where(Review.platform == platform)
+    if date_range != "all":
+        range_days = {"today": 1, "week": 7, "month": 30}[date_range]
+        stmt = stmt.where(Review.created_at >= utcnow() - timedelta(days=range_days))
     if q:
         like = f"%{q}%"
         stmt = stmt.where(
@@ -593,6 +709,29 @@ def list_review_entries(
         page_size=page_size,
         total=int(total),
     )
+
+
+@app.get("/api/reviews/{review_id}/export")
+def export_review(
+    review_id: str,
+    anonymous: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> Response:
+    review = db.get(Review, review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail="review not found")
+    job = db.get(ReviewJob, review.job_id)
+    use_anonymous = anonymous
+    if use_anonymous is None:
+        use_anonymous = bool((job.options_json or {}).get("anonymous")) if job is not None else False
+    payload = build_review_export_payload(db, review, anonymous=use_anonymous)
+
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="review-{review_id}.json"'},
+    )
+
 
 @app.delete("/api/reviews/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_review(review_id: str, db: Session = Depends(get_db)) -> Response:

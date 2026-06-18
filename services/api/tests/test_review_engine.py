@@ -5,13 +5,22 @@ import unittest
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 import app.main as main_app
-from app.majsoul_url_import import MajsoulUrlImportError, parse_majsoul_url
+from app.majsoul_url_import import (
+    FETCH_GAME_RECORD_MARKER,
+    FRAME_REQUEST,
+    FRAME_RESPONSE,
+    GameRecordFrameCapture,
+    MajsoulUrlImportError,
+    decode_majsoul_record_frame,
+    parse_majsoul_url,
+)
 from app.models import Match, MatchEvent, ReviewJob, User
 from app.play_launcher import MahjongAiLauncher, MatchRecorder, target_actor_from_agents
 from app.review_engine import (
@@ -24,10 +33,15 @@ from app.review_engine import (
     load_events_for_job,
     normalize_internal_match_events_for_mjai,
     next_actual_action,
+    parse_mjai_jsonl,
     parse_tenhou_log_payload,
     run_fallback_review,
+    serialize_mjai_jsonl,
+    validate_target_actor_visibility,
     validate_tenhou_log_payload,
+    visible_hand_actors,
 )
+from app.review_engine import settings as review_settings
 
 
 class TenhouLogValidationTests(unittest.TestCase):
@@ -82,6 +96,89 @@ class MajsoulUrlImportTests(unittest.TestCase):
         with self.assertRaisesRegex(MajsoulUrlImportError, "valid paipu parameter"):
             parse_majsoul_url("https://game.maj-soul.com/1/")
 
+    def test_capture_matches_fetch_game_record_response_by_index(self) -> None:
+        capture = GameRecordFrameCapture()
+        request = bytes([FRAME_REQUEST, 0x34, 0x12]) + FETCH_GAME_RECORD_MARKER
+
+        capture.observe_sent(1, request)
+        capture.observe_received(1, bytes([FRAME_RESPONSE, 0x35, 0x12]) + b"wrong")
+        self.assertIsNone(capture.response)
+
+        expected = bytes([FRAME_RESPONSE, 0x34, 0x12]) + b"record"
+        capture.observe_received(1, expected)
+
+        self.assertEqual(capture.response, expected)
+        self.assertTrue(capture.saw_record_request)
+
+    def test_capture_ignores_fetch_game_record_list(self) -> None:
+        capture = GameRecordFrameCapture()
+        capture.observe_sent(
+            1,
+            bytes([FRAME_REQUEST, 0x01, 0x00]) + b"fetchGameRecordList\x12",
+        )
+
+        self.assertFalse(capture.saw_record_request)
+
+    def test_decode_record_frame_rejects_non_response(self) -> None:
+        with self.assertRaisesRegex(MajsoulUrlImportError, "not a record response"):
+            decode_majsoul_record_frame(b"\x02\x01\x00invalid", "https://game.maj-soul.com/")
+
+    def test_decode_record_frame_converts_protocol_response(self) -> None:
+        from ms import protocol_pb2 as protocol
+
+        def wrap(name: str, message: object) -> bytes:
+            return protocol.Wrapper(name=name, data=message.SerializeToString()).SerializeToString()
+
+        record = protocol.ResGameRecord()
+        record.head.uuid = "test-record"
+        record.head.end_time = 1
+        record.head.config.mode.mode = 1
+        for seat in range(4):
+            player = record.head.result.players.add()
+            player.seat = seat
+            player.part_point_1 = 25000
+            player.total_point = 25000
+
+        new_round = protocol.RecordNewRound(chang=0, ju=0, dora="1m")
+        new_round.scores.extend([25000] * 4)
+        new_round.tiles0.extend(
+            ["1m", "1m", "1m", "2m", "2m", "2m", "3m", "3m", "3m", "4m", "4m", "4m", "5m", "5m"],
+        )
+        for field_name in ("tiles1", "tiles2", "tiles3"):
+            getattr(new_round, field_name).extend(
+                ["1p", "1p", "1p", "2p", "2p", "2p", "3p", "3p", "3p", "4p", "4p", "4p", "5p"],
+            )
+
+        details = protocol.GameDetailRecords()
+        details.records.extend(
+            [
+                wrap(".lq.RecordNewRound", new_round),
+                wrap(".lq.RecordLiuJu", protocol.RecordLiuJu(type=1)),
+            ],
+        )
+        record.data = wrap(".lq.GameDetailRecords", details)
+        frame = (
+            bytes([FRAME_RESPONSE, 0x01, 0x00])
+            + protocol.Wrapper(data=record.SerializeToString()).SerializeToString()
+        )
+
+        payload = json.loads(decode_majsoul_record_frame(frame, "https://game.maj-soul.com/"))
+
+        self.assertEqual(payload["ref"], "test-record")
+        self.assertEqual(payload["ratingc"], "PF4")
+        self.assertEqual(len(payload["log"]), 1)
+
+
+class ReplaySourceVisibilityTests(unittest.TestCase):
+    def test_majsoul_import_sources_are_hidden(self) -> None:
+        source_keys = {
+            item.key
+            for item in main_app.list_replay_sources()["items"]
+        }
+
+        self.assertNotIn("majsoul_file", source_keys)
+        self.assertNotIn("majsoul_url", source_keys)
+
 
 class TargetActorValidationTests(unittest.TestCase):
     def test_majsoul_import_requires_explicit_target_player(self) -> None:
@@ -95,6 +192,40 @@ class TargetActorValidationTests(unittest.TestCase):
 
         self.assertEqual(determine_target_actor(job), 2)
 
+    def test_upload_auto_detects_only_visible_hand(self) -> None:
+        events = [
+            {
+                "type": "start_kyoku",
+                "tehais": [["?"] * 13, ["1m"] * 13, ["?"] * 13, ["?"] * 13],
+            },
+        ]
+        job = SimpleNamespace(source_type="upload_file", target_actor=None, target_player_ref=None)
+
+        self.assertEqual(visible_hand_actors(events), {1})
+        self.assertEqual(determine_target_actor(job, events), 1)
+
+    def test_explicit_upload_target_takes_precedence(self) -> None:
+        events = [
+            {
+                "type": "start_kyoku",
+                "tehais": [["?"] * 13, ["1m"] * 13, ["?"] * 13, ["?"] * 13],
+            },
+        ]
+        job = SimpleNamespace(source_type="upload_file", target_actor=None, target_player_ref="3")
+
+        self.assertEqual(determine_target_actor(job, events), 3)
+
+    def test_hidden_upload_target_has_clear_error(self) -> None:
+        events = [
+            {
+                "type": "start_kyoku",
+                "tehais": [["?"] * 13, ["1m"] * 13, ["?"] * 13, ["?"] * 13],
+            },
+        ]
+
+        with self.assertRaisesRegex(ReviewExecutionError, "player 0 hand is hidden"):
+            validate_target_actor_visibility(events, 0)
+
 
 class TextDecodingTests(unittest.TestCase):
     def test_decode_text_bytes_falls_back_to_gb18030(self) -> None:
@@ -107,6 +238,114 @@ class TextDecodingTests(unittest.TestCase):
             replay_path.write_bytes((json.dumps(payload, ensure_ascii=False) + "\n").encode("gb18030"))
 
             self.assertEqual(load_events_from_file(replay_path), [payload])
+
+
+class MjaiJsonlTests(unittest.TestCase):
+    def test_jsonl_round_trip(self) -> None:
+        events = [{"type": "start_game"}, {"type": "end_game"}]
+
+        self.assertEqual(parse_mjai_jsonl(serialize_mjai_jsonl(events)), events)
+
+    def test_jsonl_parse_error_reports_line_number(self) -> None:
+        with self.assertRaisesRegex(ReviewExecutionError, "line 2"):
+            parse_mjai_jsonl('{"type":"start_game"}\nnot-json\n')
+
+    def test_legacy_json_upload_is_persisted_as_jsonl(self) -> None:
+        class StubSession:
+            commits = 0
+
+            def commit(self) -> None:
+                self.commits += 1
+
+        with TemporaryDirectory() as temp_dir:
+            old_storage_dir = review_settings.storage_dir
+            try:
+                review_settings.storage_dir = Path(temp_dir)
+                upload_path = review_settings.storage_dir / "uploads" / "legacy.json"
+                upload_path.parent.mkdir(parents=True)
+                events = [{"type": "start_game"}, {"type": "end_game"}]
+                upload_path.write_text(json.dumps(events), encoding="utf-8")
+                job = SimpleNamespace(
+                    id="legacy-upload",
+                    source_type="upload_file",
+                    source_payload={"file_key": "uploads/legacy.json"},
+                    normalized_mjai_object_key=None,
+                )
+                db = StubSession()
+
+                self.assertEqual(load_events_for_job(db, job), events)
+                self.assertEqual(job.normalized_mjai_object_key, "normalized/uploads/legacy-upload.jsonl")
+                normalized_path = review_settings.storage_dir / job.normalized_mjai_object_key
+                self.assertEqual(parse_mjai_jsonl(normalized_path.read_text(encoding="utf-8")), events)
+                self.assertEqual(db.commits, 1)
+            finally:
+                review_settings.storage_dir = old_storage_dir
+
+    def test_uploaded_internal_export_is_repaired_for_review(self) -> None:
+        events = [
+            {"type": "start_game"},
+            {
+                "type": "start_kyoku",
+                "bakaze": "E",
+                "kyoku": 1,
+                "honba": 0,
+                "kyotaku": 0,
+                "oya": 0,
+                "dora_marker": "1m",
+                "scores": [25000, 25000, 25000, 25000],
+                "tehais": [["?"] * 13, ["1m"] * 13, ["?"] * 13, ["?"] * 13],
+            },
+            {"type": "ryukyoku"},
+            {"type": "end_kyoku"},
+            {"type": "end_kyoku"},
+        ]
+
+        normalized = normalize_internal_match_events_for_mjai(events)
+
+        self.assertEqual(normalized[-2], {"type": "ryukyoku", "deltas": [0, 0, 0, 0]})
+        self.assertEqual(normalized[-1], {"type": "end_kyoku"})
+
+    def test_play_export_writes_reviewable_jsonl(self) -> None:
+        rows = [
+            SimpleNamespace(payload_json={"type": "start_game"}),
+            SimpleNamespace(
+                payload_json={
+                    "type": "start_kyoku",
+                    "bakaze": "E",
+                    "kyoku": 1,
+                    "honba": 0,
+                    "kyotaku": 0,
+                    "oya": 0,
+                    "dora_marker": "1m",
+                    "scores": [25000, 25000, 25000, 25000],
+                    "tehais": [["?"] * 13, ["1m"] * 13, ["?"] * 13, ["?"] * 13],
+                },
+            ),
+            SimpleNamespace(payload_json={"type": "ryukyoku"}),
+            SimpleNamespace(payload_json={"type": "end_kyoku"}),
+            SimpleNamespace(payload_json={"type": "end_kyoku"}),
+        ]
+
+        class ScalarRows:
+            def all(self) -> list[SimpleNamespace]:
+                return rows
+
+        class StubSession:
+            def __enter__(self) -> "StubSession":
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def scalars(self, _statement: object) -> ScalarRows:
+                return ScalarRows()
+
+        with patch("app.play_launcher.SessionLocal", return_value=StubSession()):
+            exported = MahjongAiLauncher(SimpleNamespace()).export_match_events_jsonl("match-id")
+
+        events = parse_mjai_jsonl(exported)
+        self.assertEqual(events[-2], {"type": "ryukyoku", "deltas": [0, 0, 0, 0]})
+        self.assertEqual(events[-1], {"type": "end_kyoku"})
 
 
 class FallbackReviewTests(unittest.TestCase):

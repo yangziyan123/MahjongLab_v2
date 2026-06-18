@@ -1,0 +1,872 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+
+from app.database import Base
+from app.config import Settings, load_service_env
+from app.models import (
+    Review,
+    ReviewEntry,
+    ReviewJob,
+    ReviewMessage,
+    ReviewMessageFeedback,
+    User,
+)
+from app.review_assistant.context import DecisionContextCompiler
+from app.review_assistant import routes as assistant_routes
+from app.review_assistant.provider import (
+    DeterministicReviewAssistantProvider,
+    OpenAICompatibleReviewAssistantProvider,
+    ProviderResult,
+    ProviderStreamEvent,
+    StreamingJsonStringField,
+)
+from app.review_assistant.prompts import build_provider_messages, should_generate_explanation
+from app.review_assistant.schemas import (
+    ActionComparison,
+    ConversationAnswer,
+    DecisionExplanation,
+    EvidenceClaim,
+)
+from app.review_assistant.routes import (
+    conversation_history,
+    create_message,
+    create_or_get_conversation,
+    submit_feedback,
+)
+from app.review_assistant.validation import ExplanationValidationError, validate_explanation
+from app.schemas import ReviewAssistantFeedbackRequest, ReviewAssistantMessageRequest
+
+
+def seed_review(db):
+    user = User(display_name="Tester")
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    job = ReviewJob(
+        user_id=user.id,
+        status="completed",
+        source_type="inline_json",
+        source_payload={},
+        options_json={},
+        attempt_count=1,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    review = Review(
+        job_id=job.id,
+        user_id=user.id,
+        target_actor=0,
+        target_player_label="Tester",
+        engine_name="mortal",
+        engine_version="test",
+        reviewed_decision_count=1,
+        match_decision_count=0,
+        high_deviation_count=0,
+        medium_deviation_count=1,
+        optimal_count=0,
+        summary_json={},
+        stats_json={},
+        result_object_key="test.json",
+    )
+    db.add(review)
+    db.commit()
+    db.refresh(review)
+    job.review_id = review.id
+    entry = ReviewEntry(
+        review_id=review.id,
+        seq=0,
+        kyoku_index=0,
+        honba=0,
+        junme=1,
+        tiles_left=69,
+        last_actor=0,
+        tile="8m",
+        decision_type="discard",
+        actual_action_json={"type": "dahai", "actor": 0, "pai": "9s", "tsumogiri": False},
+        expected_action_json={"type": "dahai", "actor": 0, "pai": "N", "tsumogiri": False},
+        is_match=False,
+        deviation_level="medium",
+        delta_score=0,
+        shanten=3,
+        at_furiten=False,
+        details_json=[
+            {
+                "expected_action": {"type": "dahai", "actor": 0, "pai": "N", "tsumogiri": False},
+                "best_q_value": 0.13,
+                "prob": 1.0,
+            },
+        ],
+        state_snapshot_json={
+            "table": {
+                "target_actor": 0,
+                "oya": 0,
+                "scores": [25000, 25000, 25000, 25000],
+                "dora_markers": ["4m"],
+                "hands": [
+                    ["F", "8p", "1m", "1m", "6p", "2m", "9s", "3m", "1s", "1s", "4m", "5s", "N", "8m"],
+                    ["?"] * 13,
+                    ["?"] * 13,
+                    ["?"] * 13,
+                ],
+                "drawn_tiles": ["8m", None, None, None],
+                "discards": [[], [], [], []],
+                "melds": [[], [], [], []],
+                "riichi": [False, False, False, False],
+                "tiles_left": 69,
+            },
+        },
+        tags_json=["efficiency"],
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+    return user, review, entry
+
+
+async def collect_stream(response) -> str:
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+    return "".join(chunks)
+
+
+class ReviewAssistantTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        db_path = Path(self.temp_dir.name) / "assistant.db"
+        self.engine = create_engine(f"sqlite:///{db_path.as_posix()}")
+        Base.metadata.create_all(bind=self.engine)
+        self.Session = sessionmaker(bind=self.engine)
+        self.original_session_local = assistant_routes.SessionLocal
+        self.original_provider = assistant_routes.settings.review_assistant_provider
+        assistant_routes.SessionLocal = self.Session
+        assistant_routes.settings.review_assistant_provider = "deterministic"
+        self.db = self.Session()
+        self.user, self.review, self.entry = seed_review(self.db)
+
+    def mark_entry_as_match(self) -> None:
+        self.entry.actual_action_json = dict(self.entry.expected_action_json)
+        self.entry.is_match = True
+        self.entry.deviation_level = "none"
+        self.entry.delta_score = 0
+        self.db.commit()
+        self.db.refresh(self.entry)
+
+    def tearDown(self) -> None:
+        self.db.close()
+        assistant_routes.SessionLocal = self.original_session_local
+        assistant_routes.settings.review_assistant_provider = self.original_provider
+        self.engine.dispose()
+        self.temp_dir.cleanup()
+
+    def test_context_marks_missing_actual_action_score(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        analysis = compiled.payload["engine_analysis"]
+
+        self.assertIsNone(analysis["actual_action_score"])
+        self.assertIsNone(analysis["score_gap"])
+        self.assertEqual(analysis["recommended_action_score"], 0.13)
+        self.assertIn("无法给出精确价值差", " ".join(compiled.payload["derived_facts"]["data_limitations"]))
+
+    def test_context_v2_builds_evidence_ledger_and_discard_efficiency(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        payload = compiled.payload
+        evidence_ids = [item["id"] for item in payload["evidence_ledger"]]
+        actual = payload["derived_facts"]["actual_efficiency"]
+        recommended = payload["derived_facts"]["recommended_efficiency"]
+
+        self.assertEqual(payload["schema_version"], "decision-context.v2")
+        self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
+        self.assertIn("D6", evidence_ids)
+        self.assertEqual(actual["shanten_after_discard"], 3)
+        self.assertEqual(recommended["shanten_after_discard"], 3)
+        self.assertEqual(actual["effective_type_count"], 14)
+        self.assertEqual(recommended["effective_type_count"], 15)
+        self.assertGreater(
+            recommended["visible_remaining_upper_bound"],
+            actual["visible_remaining_upper_bound"],
+        )
+
+    def test_context_marks_matching_action_as_optimal(self) -> None:
+        self.mark_entry_as_match()
+
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+
+        self.assertTrue(compiled.payload["engine_analysis"]["is_match"])
+        self.assertEqual(
+            compiled.payload["engine_analysis"]["actual_action"],
+            compiled.payload["engine_analysis"]["recommended_action"],
+        )
+
+    def test_matching_action_explanation_confirms_optimal_without_self_comparison(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+
+        async def generate():
+            return await DeterministicReviewAssistantProvider()._generate(
+                decision_context=compiled.payload,
+                history=[],
+                question="请解释这一手",
+                answer_mode="concise",
+            )
+
+        result = asyncio.run(generate())
+
+        self.assertIn("命中最优", result.text)
+        self.assertNotIn("而不是", result.text)
+        self.assertEqual(result.explanation["comparison"], [])
+        self.assertEqual(result.explanation["actual_action"], result.explanation["recommended_action"])
+
+    def test_validator_rejects_self_contradiction_for_matching_action(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        limitation = compiled.payload["derived_facts"]["data_limitations"][0]
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 N",
+            verdict="在当前可见证据下，应优先打 N，而不是打 N。",
+            key_points=[
+                EvidenceClaim(
+                    claim="牌谱实际动作和复盘引擎推荐均为打 N。",
+                    evidence_ids=["E1", "E2"],
+                ),
+            ],
+            comparison=[],
+            uncertainties=[EvidenceClaim(claim=limitation, evidence_ids=["L1"])],
+            teaching_rule="先确认动作是否一致。",
+            confidence="low",
+        )
+
+        with self.assertRaisesRegex(ExplanationValidationError, "不能虚构动作差距或优劣"):
+            validate_explanation(explanation, compiled.payload)
+
+    def test_llm_matching_action_hides_bad_verdict_and_falls_back(self) -> None:
+        self.mark_entry_as_match()
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        limitation = compiled.payload["derived_facts"]["data_limitations"][0]
+        bad_explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 N",
+            verdict="实际动作与推荐一致，但仍应优先打 N，而不是打 N。",
+            key_points=[
+                EvidenceClaim(
+                    claim="牌谱实际动作和复盘引擎推荐均为打 N。",
+                    evidence_ids=["E1", "E2"],
+                ),
+            ],
+            comparison=[],
+            uncertainties=[EvidenceClaim(claim=limitation, evidence_ids=["L1"])],
+            teaching_rule="先确认动作是否一致。",
+            confidence="low",
+        )
+        raw_text = bad_explanation.model_dump_json()
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+
+        async def bad_stream(messages):
+            yield ProviderStreamEvent(delta=raw_text)
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=raw_text,
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = bad_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[],
+                    question="请解释这一手",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        visible_text = "".join(event.delta or "" for event in events)
+        result = events[-1].result
+
+        self.assertIn("命中最优", visible_text)
+        self.assertNotIn("而不是", visible_text)
+        self.assertEqual(result.provider, "deterministic-fallback")
+        self.assertIn("命中最优", result.text)
+        self.assertNotIn("而不是", result.text)
+
+    def test_validator_rejects_unknown_evidence_and_unsupported_number(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 9s",
+            verdict="这里推荐打 N。",
+            key_points=[
+                EvidenceClaim(claim="这个动作有 999 种有效进张。", evidence_ids=["X1"]),
+            ],
+            comparison=[],
+            uncertainties=[
+                EvidenceClaim(
+                    claim=compiled.payload["derived_facts"]["data_limitations"][0],
+                    evidence_ids=["L1"],
+                ),
+            ],
+            teaching_rule="只使用可核验的牌桌与引擎证据。",
+            confidence="low",
+        )
+
+        with self.assertRaises(ExplanationValidationError):
+            validate_explanation(explanation, compiled.payload)
+
+        explanation.key_points[0] = EvidenceClaim(
+            claim="这个动作有 999 种有效进张。",
+            evidence_ids=["D6"],
+        )
+        with self.assertRaisesRegex(ExplanationValidationError, "没有被本条引用证据支持"):
+            validate_explanation(explanation, compiled.payload)
+
+    def test_validator_rejects_future_information(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        explanation = DecisionExplanation(
+            recommended_action="打 N",
+            actual_action="打 9s",
+            verdict="后来摸到 7m，所以这里推荐打 N。",
+            key_points=[
+                EvidenceClaim(claim="复盘引擎推荐打 N。", evidence_ids=["E2"]),
+            ],
+            comparison=[
+                ActionComparison(
+                    dimension="efficiency",
+                    actual_effect="使用实际动作的牌效结果",
+                    recommended_effect="使用推荐动作的牌效结果",
+                    evidence_ids=["D6"],
+                ),
+            ],
+            uncertainties=[
+                EvidenceClaim(
+                    claim=compiled.payload["derived_facts"]["data_limitations"][0],
+                    evidence_ids=["L1"],
+                ),
+            ],
+            teaching_rule="只看决策时可见信息。",
+            confidence="low",
+        )
+
+        with self.assertRaisesRegex(ExplanationValidationError, "未来事件"):
+            validate_explanation(explanation, compiled.payload)
+
+    def test_conversation_is_reused_for_same_entry(self) -> None:
+        first = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        second = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.entry_id, self.entry.id)
+        self.assertEqual(first.provider_mode, "deterministic")
+        self.assertTrue(first.suggested_questions)
+
+    def test_message_stream_persists_completed_answer(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="为什么不是打 9s？",
+                client_request_id="request-1",
+            ),
+            self.db,
+        )
+
+        stream = asyncio.run(collect_stream(response))
+        completed_lines = [line for line in stream.splitlines() if line.startswith("data: ")]
+        completed_payload = json.loads(completed_lines[-1][6:])
+        messages = self.db.scalars(
+            select(ReviewMessage)
+            .where(ReviewMessage.conversation_id == conversation.id)
+            .order_by(ReviewMessage.created_at.asc()),
+        ).all()
+
+        self.assertIn("event: message.delta", stream)
+        self.assertIn("event: message.completed", stream)
+        self.assertEqual(completed_payload["message"]["status"], "completed")
+        self.assertEqual([message.role for message in messages], ["user", "assistant"])
+        self.assertIn("无法给出精确价值差", messages[1].content_json["text"])
+        self.assertEqual(messages[1].model_provider, "deterministic")
+        self.assertEqual(
+            messages[1].content_json["explanation"]["schema_version"],
+            "decision-explanation.v1",
+        )
+        self.assertTrue(messages[1].content_json["sources"]["evidence"])
+
+    def test_greeting_returns_direct_reply_without_decision_template(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="你好",
+                client_request_id="request-greeting",
+            ),
+            self.db,
+        )
+
+        asyncio.run(collect_stream(response))
+        assistant = self.db.scalar(
+            select(ReviewMessage).where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "assistant",
+            ),
+        )
+
+        self.assertEqual(
+            assistant.content_json["text"],
+            "你好。我可以直接回答这手牌的动作、牌效或攻守问题。",
+        )
+        self.assertIsNone(assistant.content_json["explanation"])
+        self.assertIsNone(assistant.content_json["sources"])
+
+    def test_follow_up_uses_direct_conversation_contract(self) -> None:
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        history = [
+            {"role": "user", "content": "请解释这一手"},
+            {"role": "assistant", "content": "此前的结构化解释"},
+        ]
+
+        self.assertFalse(should_generate_explanation([], "你好"))
+        self.assertFalse(should_generate_explanation(history, "那为什么牌效更好？"))
+        messages = build_provider_messages(
+            compiled.payload,
+            history,
+            "那为什么牌效更好？",
+            "concise",
+        )
+
+        self.assertIn("直接回复用户的最新消息", messages[0]["content"])
+        self.assertIn("conversation-answer.v1", messages[1]["content"])
+        self.assertEqual(messages[-1], {"role": "user", "content": "那为什么牌效更好？"})
+
+    def test_llm_follow_up_renders_only_direct_answer(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        answer = ConversationAnswer(
+            answer="因为推荐动作保留了更多有效进张类型。",
+            evidence_ids=["D6"],
+            uncertainty_ids=[],
+        )
+
+        async def direct_stream(messages):
+            self.assertIn("conversation-answer.v1", messages[1]["content"])
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=answer.model_dump_json(),
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = direct_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[
+                        {"role": "user", "content": "解释这一手"},
+                        {"role": "assistant", "content": "此前的结构化解释"},
+                    ],
+                    question="那为什么牌效更好？",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        result = events[-1].result
+
+        self.assertEqual(result.text, answer.answer)
+        self.assertIsNone(result.explanation)
+        self.assertEqual(result.evidence_ids, ["D6"])
+
+    def test_streaming_json_field_extracts_answer_across_chunks(self) -> None:
+        extractor = StreamingJsonStringField("answer")
+
+        deltas = [
+            extractor.feed('{"schema_version":"conversation-answer.v1","ans'),
+            extractor.feed('wer":"先回答\\n你的'),
+            extractor.feed('问题。","evidence_ids":[]}'),
+        ]
+
+        self.assertEqual(deltas, ["", "先回答\n你的", "问题。"])
+
+    def test_llm_follow_up_forwards_visible_answer_deltas(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        raw_text = ConversationAnswer(
+            answer="先回答你的问题。",
+            evidence_ids=["E2"],
+            uncertainty_ids=[],
+        ).model_dump_json()
+
+        async def streaming_answer(messages):
+            self.assertIn("conversation-answer.v1", messages[1]["content"])
+            chunks = [
+                '{"schema_version":"conversation-answer.v1","answer":"先回答',
+                '你的问题。","evidence_ids":["E2"],"uncertainty_ids":[]}',
+            ]
+            for chunk in chunks:
+                yield ProviderStreamEvent(delta=chunk)
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text=raw_text,
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = streaming_answer
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[
+                        {"role": "user", "content": "解释这一手"},
+                        {"role": "assistant", "content": "此前的结构化解释"},
+                    ],
+                    question="那推荐是什么？",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+
+        self.assertEqual(
+            [event.delta for event in events if event.delta],
+            ["先回答", "你的问题。"],
+        )
+        self.assertEqual(events[-1].result.text, "先回答你的问题。")
+
+    def test_second_message_answers_follow_up_without_repeating_full_template(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        first_response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="请解释这一手",
+                client_request_id="request-first-explanation",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(first_response))
+        follow_up_response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="那牌效具体差在哪里？",
+                client_request_id="request-follow-up",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(follow_up_response))
+        assistant_messages = self.db.scalars(
+            select(ReviewMessage)
+            .where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "assistant",
+            )
+            .order_by(ReviewMessage.created_at.asc()),
+        ).all()
+
+        self.assertEqual(len(assistant_messages), 2)
+        self.assertIn("单看确定性牌效", assistant_messages[1].content_json["text"])
+        self.assertNotIn("结论\n", assistant_messages[1].content_json["text"])
+        self.assertIsNone(assistant_messages[1].content_json["explanation"])
+
+    def test_feedback_is_upserted(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="解释这一手",
+                client_request_id="request-2",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(response))
+        assistant = self.db.scalar(
+            select(ReviewMessage).where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "assistant",
+            ),
+        )
+
+        first = submit_feedback(
+            assistant.id,
+            ReviewAssistantFeedbackRequest(rating="helpful"),
+            self.db,
+        )
+        second = submit_feedback(
+            assistant.id,
+            ReviewAssistantFeedbackRequest(rating="error", reason="与牌桌不符"),
+            self.db,
+        )
+        feedback_count = len(self.db.scalars(select(ReviewMessageFeedback)).all())
+
+        self.assertEqual(first.rating, "helpful")
+        self.assertEqual(second.rating, "error")
+        self.assertEqual(second.reason, "与牌桌不符")
+        self.assertEqual(feedback_count, 1)
+
+    def test_regeneration_history_excludes_previous_reply_to_same_question(self) -> None:
+        conversation = create_or_get_conversation(self.review.id, self.entry.id, self.db)
+        response = create_message(
+            conversation.id,
+            ReviewAssistantMessageRequest(
+                content="解释这一手",
+                client_request_id="request-3",
+            ),
+            self.db,
+        )
+        asyncio.run(collect_stream(response))
+        user_message = self.db.scalar(
+            select(ReviewMessage).where(
+                ReviewMessage.conversation_id == conversation.id,
+                ReviewMessage.role == "user",
+            ),
+        )
+
+        history = conversation_history(self.db, conversation.id, user_message.id)
+
+        self.assertEqual(history, [])
+
+    def test_deepseek_defaults_to_v4_flash_without_thinking(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_base_url = ""
+        config.review_assistant_model = ""
+        config.review_assistant_api_key = "test-key"
+        config.review_assistant_thinking = False
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "choices": [{"message": {"content": "ok"}}],
+                        "usage": {"prompt_tokens": 12, "completion_tokens": 3},
+                    },
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout):
+            captured["url"] = request.full_url
+            captured["authorization"] = request.get_header("Authorization")
+            captured["timeout"] = timeout
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        with patch("urllib.request.urlopen", fake_urlopen):
+            result = provider._request([{"role": "user", "content": "test"}])
+
+        payload = captured["payload"]
+        self.assertEqual(captured["url"], "https://api.deepseek.com/chat/completions")
+        self.assertEqual(captured["authorization"], "Bearer test-key")
+        self.assertEqual(payload["model"], "deepseek-v4-flash")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertEqual(payload["temperature"], 0.2)
+        self.assertNotIn("reasoning_effort", payload)
+        self.assertEqual(result.provider, "deepseek")
+        self.assertEqual(result.model, "deepseek-v4-flash")
+
+    def test_deepseek_thinking_uses_reasoning_effort_without_temperature(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_model = "deepseek-v4-pro"
+        config.review_assistant_api_key = "test-key"
+        config.review_assistant_thinking = True
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self) -> bytes:
+                return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+        with patch("urllib.request.urlopen", fake_urlopen):
+            provider._request([{"role": "user", "content": "test"}])
+
+        payload = captured["payload"]
+        self.assertEqual(payload["model"], "deepseek-v4-pro")
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
+        self.assertEqual(payload["reasoning_effort"], "high")
+        self.assertNotIn("temperature", payload)
+
+    def test_deepseek_stream_forwards_native_deltas_and_usage(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_base_url = ""
+        config.review_assistant_model = ""
+        config.review_assistant_api_key = "test-key"
+        config.review_assistant_thinking = False
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            reason_phrase = "OK"
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aiter_lines(self):
+                lines = [
+                    'data: {"choices":[{"delta":{"content":"这里"}}],"usage":null}',
+                    'data: {"choices":[{"delta":{"content":"建议打 N"}}],"usage":null}',
+                    'data: {"choices":[],"usage":{"prompt_tokens":21,"completion_tokens":8}}',
+                    "data: [DONE]",
+                ]
+                for line in lines:
+                    yield line
+
+        class FakeStreamContext:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+        class FakeAsyncClient:
+            def __init__(self, *, timeout):
+                captured["timeout"] = timeout
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def stream(self, method, url, *, json, headers):
+                captured["method"] = method
+                captured["url"] = url
+                captured["payload"] = json
+                captured["headers"] = headers
+                return FakeStreamContext()
+
+        async def collect_events():
+            provider = OpenAICompatibleReviewAssistantProvider(config)
+            return [
+                event
+                async for event in provider._stream_request(
+                    [{"role": "user", "content": "test"}],
+                )
+            ]
+
+        with patch("app.review_assistant.provider.httpx.AsyncClient", FakeAsyncClient):
+            events = asyncio.run(collect_events())
+
+        payload = captured["payload"]
+        headers = captured["headers"]
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["url"], "https://api.deepseek.com/chat/completions")
+        self.assertTrue(payload["stream"])
+        self.assertEqual(payload["stream_options"], {"include_usage": True})
+        self.assertEqual(headers["Accept"], "text/event-stream")
+        self.assertEqual([event.delta for event in events[:-1]], ["这里", "建议打 N"])
+        self.assertEqual(events[-1].result.text, "这里建议打 N")
+        self.assertEqual(events[-1].result.input_tokens, 21)
+        self.assertEqual(events[-1].result.output_tokens, 8)
+
+    def test_invalid_model_explanation_falls_back_to_validated_local_answer(self) -> None:
+        config = Settings()
+        config.review_assistant_provider = "deepseek"
+        config.review_assistant_api_key = "test-key"
+        compiled = DecisionContextCompiler().compile(self.review, self.entry)
+        provider = OpenAICompatibleReviewAssistantProvider(config)
+
+        async def invalid_stream(messages):
+            yield ProviderStreamEvent(
+                result=ProviderResult(
+                    text="not-json",
+                    provider="deepseek",
+                    model="test-model",
+                ),
+            )
+
+        provider._stream_request = invalid_stream
+
+        async def collect_events():
+            return [
+                event
+                async for event in provider.stream(
+                    decision_context=compiled.payload,
+                    history=[],
+                    question="解释这一手",
+                    answer_mode="concise",
+                )
+            ]
+
+        events = asyncio.run(collect_events())
+        result = events[-1].result
+
+        self.assertEqual(result.provider, "deterministic-fallback")
+        self.assertEqual(result.explanation["schema_version"], "decision-explanation.v1")
+        self.assertIn("结构化解释", result.fallback_reason)
+
+    def test_service_env_is_loaded_without_overriding_process_environment(self) -> None:
+        env_path = Path(self.temp_dir.name) / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "MAHJONGLAB_REVIEW_ASSISTANT_PROVIDER=deepseek",
+                    "MAHJONGLAB_REVIEW_ASSISTANT_API_KEY=from-file",
+                    "MAHJONGLAB_REVIEW_ASSISTANT_THINKING=true",
+                ],
+            ),
+            encoding="utf-8",
+        )
+
+        with patch.dict(
+            os.environ,
+            {"MAHJONGLAB_REVIEW_ASSISTANT_PROVIDER": "openai-compatible"},
+            clear=True,
+        ):
+            load_service_env(env_path)
+            config = Settings()
+
+        self.assertEqual(config.review_assistant_provider, "openai-compatible")
+        self.assertEqual(config.review_assistant_api_key, "from-file")
+        self.assertTrue(config.review_assistant_thinking)
+
+
+if __name__ == "__main__":
+    unittest.main()

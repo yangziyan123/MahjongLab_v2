@@ -107,6 +107,7 @@ class MahjongScene extends Phaser.Scene {
     constructor() {
         super({ key: 'MahjongScene' });
         this.selectTile = false;
+        this.reviewTileSelectHandler = null;
         this.queue = new BlockingQueue();
     }
 
@@ -194,6 +195,7 @@ class MahjongScene extends Phaser.Scene {
             this.#furitenMark = null;
         }
         this.selectTile = false;
+        this.reviewTileSelectHandler = null;
     }
 
     getTileFrameIndex(tileId) {
@@ -214,7 +216,7 @@ class MahjongScene extends Phaser.Scene {
     }
 
     setHandTileInteractivity(tile) {
-        tile.setInteractive();
+        tile.setInteractive({ useHandCursor: true });
         tile.on('pointerover', () => {
             tile.y = this.sys.canvas.height - 75 * globalScaleRate;
         });
@@ -225,10 +227,20 @@ class MahjongScene extends Phaser.Scene {
         tile.on('pointerdown', () => {
             if (this.selectTile) {
                 this.selectTile = false;
-                const index = this.#handTiles.getChildren().indexOf(tile);
-                this.queue.enqueue(index);
+                const handTiles = this.#handTiles.getChildren().filter((child) => child.type !== 'Graphics');
+                const index = handTiles.indexOf(tile);
+                const tileId = tile.getData('tileId');
+                if (typeof this.reviewTileSelectHandler === 'function') {
+                    this.reviewTileSelectHandler(index, tileId);
+                } else {
+                    this.queue.enqueue(index);
+                }
             }
         })
+    }
+
+    setReviewTileSelectHandler(handler) {
+        this.reviewTileSelectHandler = typeof handler === 'function' ? handler : null;
     }
 
     renderDraw(seat, who, tileId) {
@@ -251,6 +263,7 @@ class MahjongScene extends Phaser.Scene {
                 imageSet = 'tiles4';
                 frameIndex = this.getTileFrameIndex(tileId);
                 tile = this.#handTiles.create(startX, startY, imageSet, frameIndex).setAlpha(0).setDepth(1000).setScale(scale);
+                tile.setData('tileId', tileId);
                 this.setHandTileInteractivity(tile);
                 break
             case 1:
@@ -301,6 +314,7 @@ class MahjongScene extends Phaser.Scene {
         let y = this.sys.canvas.height - 60 * globalScaleRate;
         let frameIndex = this.getTileFrameIndex(tileId);
         let tile = this.#handTiles.create(x, y, 'tiles4', frameIndex).setScale(scale).setDepth(1000);
+        tile.setData('tileId', tileId);
         this.setHandTileInteractivity(tile);
 
         let highlight = this.add.graphics();
@@ -360,6 +374,7 @@ class MahjongScene extends Phaser.Scene {
             let frameIndex = this.getTileFrameIndex(code);
 
             let tile = this.#handTiles.create(x, y, 'tiles4', frameIndex).setScale(scale).setDepth(1000);
+            tile.setData('tileId', code);
             this.setHandTileInteractivity(tile);
         }
     }

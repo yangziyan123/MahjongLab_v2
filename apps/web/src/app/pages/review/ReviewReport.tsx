@@ -4,14 +4,18 @@ import {
   ArrowLeft,
   ArrowRightCircle,
   Clock3,
+  Download,
   Layers3,
 } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { getReview, listAllReviewEntries } from "../../lib/api";
+import {
+  getReviewExportUrl,
+  getReview,
+  listAllReviewEntries,
+} from "../../lib/api";
 import { formatDateTime, formatDecisionType, formatKyokuLabel, formatPlatform } from "../../lib/format";
-import { useReviewReportStore } from "../../store/review-report";
 import type { ReviewEntry } from "../../lib/types";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -80,27 +84,39 @@ function formatTrainingTag(tag: string) {
 
 export function ReviewReport() {
   const { reportId = "" } = useParams();
-  const [searchParams] = useSearchParams();
-  const {
-    kyoku,
-    deviationLevel,
-    decisionType,
-    selectedEntryId,
-    setKyoku,
-    setDeviationLevel,
-    setDecisionType,
-    setSelectedEntryId,
-    reset,
-  } = useReviewReportStore();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const kyokuParam = searchParams.get("kyoku");
+  const deviationParam = searchParams.get("deviation");
+  const decisionParam = searchParams.get("decision");
+  const kyoku = kyokuParam && /^\d+$/.test(kyokuParam) ? kyokuParam : "all";
+  const deviationLevel = ["none", "medium", "high"].includes(deviationParam ?? "") ? deviationParam! : "all";
+  const decisionType = ["discard", "riichi", "chi", "pon", "kan", "agari", "ryukyoku", "other"].includes(
+    decisionParam ?? "",
+  )
+    ? decisionParam!
+    : "all";
   const entryFromQuery = Number(searchParams.get("entry") ?? "");
-  const entryQuery = Number.isInteger(entryFromQuery) && entryFromQuery > 0 ? `?entry=${entryFromQuery}` : "";
+  const selectedEntryId = Number.isInteger(entryFromQuery) && entryFromQuery > 0 ? entryFromQuery : null;
+  const entryQuery = selectedEntryId ? `?entry=${selectedEntryId}` : "";
 
-  useEffect(() => {
-    reset();
-    if (Number.isInteger(entryFromQuery) && entryFromQuery > 0) {
-      setSelectedEntryId(entryFromQuery);
+  const updateSearchParams = (updates: Record<string, string | null>) => {
+    const next = new URLSearchParams(searchParams);
+    Object.entries(updates).forEach(([key, value]) => {
+      if (!value || value === "all") {
+        next.delete(key);
+      } else {
+        next.set(key, value);
+      }
+    });
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
     }
-  }, [entryFromQuery, reportId, reset, setSelectedEntryId]);
+  };
+  const setKyoku = (value: string) => updateSearchParams({ kyoku: value, entry: null });
+  const setDeviationLevel = (value: string) => updateSearchParams({ deviation: value, entry: null });
+  const setDecisionType = (value: string) => updateSearchParams({ decision: value, entry: null });
+  const setSelectedEntryId = (value: number | null) =>
+    updateSearchParams({ entry: value === null ? null : String(value) });
 
   const reviewQuery = useQuery({
     queryKey: ["review", reportId],
@@ -286,6 +302,12 @@ export function ReviewReport() {
               <h1 className="ml-4 text-2xl font-bold text-slate-900">复盘报告</h1>
             </div>
             <div className="flex gap-2">
+              <Button asChild variant="outline" size="sm">
+                <a href={getReviewExportUrl(reportId)}>
+                  <Download className="mr-2 h-4 w-4" />
+                  JSON
+                </a>
+              </Button>
               <Link to={`/review/replay/${reportId}${entryQuery}`}>
                 <Button variant="outline" size="sm">
                   逐步复盘
@@ -522,9 +544,7 @@ export function ReviewReport() {
                     <CardHeader>
                       <CardTitle className="flex flex-wrap items-center justify-between gap-2">
                         <span>{formatKyokuLabel(selectedEntry.kyoku_index, selectedEntry.honba)}</span>
-                        <div className="flex items-center gap-2">
-                          {getDeviationBadge(selectedEntry)}
-                        </div>
+                        <div className="flex items-center gap-2">{getDeviationBadge(selectedEntry)}</div>
                       </CardTitle>
                       <CardDescription>
                         第 {selectedEntry.junme} 巡 · 剩余牌 {selectedEntry.tiles_left} 张 · 动作类型{" "}

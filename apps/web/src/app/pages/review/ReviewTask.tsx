@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeft, CheckCircle, Loader2, RefreshCw, XCircle } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { useEffect } from "react";
+import { Link, useNavigate, useParams } from "react-router";
 
 import { getReviewJob, retryReviewJob } from "../../lib/api";
 import { formatDateTime, formatPlatform, formatSourceType } from "../../lib/format";
@@ -47,6 +48,7 @@ function getStatusInfo(status: ReviewJobStatus) {
 
 export function ReviewTask() {
   const { taskId = "" } = useParams();
+  const navigate = useNavigate();
 
   const jobQuery = useQuery({
     queryKey: ["review-job", taskId],
@@ -64,6 +66,13 @@ export function ReviewTask() {
       void jobQuery.refetch();
     },
   });
+
+  useEffect(() => {
+    const job = jobQuery.data;
+    if (job?.status === "completed" && job.review_id) {
+      navigate(`/review/open/${job.review_id}`, { replace: true });
+    }
+  }, [jobQuery.data, navigate]);
 
   if (jobQuery.isLoading) {
     return (

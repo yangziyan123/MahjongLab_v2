@@ -73,6 +73,15 @@ def normalize_ai_opponents(ai_opponents: object) -> list[dict]:
     return normalized
 
 
+def seat_to_actor(seat: str) -> int | None:
+    return {
+        "east": 0,
+        "south": 1,
+        "west": 2,
+        "north": 3,
+    }.get(seat)
+
+
 def summarize_agents(agents: object) -> list[dict]:
     if not isinstance(agents, list):
         return []
@@ -225,7 +234,17 @@ class MahjongAiLauncher:
             proc.stop()
         self._processes = {}
 
-    def _build_processes(self, ai_level: str) -> dict[str, ManagedProcess]:
+    def _build_processes(
+        self,
+        *,
+        ai_level: str,
+        match_type: str,
+        seat: str,
+        start_points: int,
+        aka_dora: int,
+        kuitan: bool,
+        allow_south_entry: bool,
+    ) -> dict[str, ManagedProcess]:
         host = self.settings.mahjong_ai_server_host
         server_port = _find_free_port(host)
         websocket_port = _find_free_port(host)
@@ -247,9 +266,22 @@ class MahjongAiLauncher:
             "--allow_observe",
             "-d",
             "-f",
+            "--match_type",
+            match_type,
+            "--start_points",
+            str(start_points),
         ]
         if ai_level == "normal":
             server_command.append("--disable_ai_models")
+        requested_actor = seat_to_actor(seat)
+        if requested_actor is not None:
+            server_command.extend(["--human_seat", str(requested_actor)])
+        if aka_dora == 0:
+            server_command.append("--no_aka")
+        if not kuitan:
+            server_command.append("--disable_kuitan")
+        if match_type == "tonpu" and allow_south_entry:
+            server_command.append("--allow_extra_rounds")
 
         return {
             "server": ManagedProcess(
@@ -686,17 +718,34 @@ class MahjongAiLauncher:
         db.refresh(user)
         return user.id
 
-    def _create_match(self, username: str, ai_level: str, ai_opponents: list[dict] | None = None) -> Match:
+    def _create_match(
+        self,
+        *,
+        username: str,
+        ai_level: str,
+        match_type: str,
+        seat: str,
+        start_points: int,
+        aka_dora: int,
+        kuitan: bool,
+        allow_south_entry: bool,
+        ai_opponents: list[dict] | None = None,
+    ) -> Match:
         with SessionLocal() as db:
             user_id = self._ensure_default_user_id(db)
             match = Match(
                 user_id=user_id,
                 status="created",
-                match_type="hanchan",
+                match_type=match_type,
                 source_json={
                     "origin": "mahjong_ai",
                     "username": username,
                     "ai_level": ai_level,
+                    "requested_seat": seat,
+                    "start_points": start_points,
+                    "aka_dora": aka_dora,
+                    "kuitan": kuitan,
+                    "allow_south_entry": allow_south_entry,
                     "ai_opponents": normalize_ai_opponents(ai_opponents),
                 },
             )
@@ -709,6 +758,12 @@ class MahjongAiLauncher:
         self,
         username: str,
         ai_level: str = "normal",
+        match_type: str = "hanchan",
+        seat: str = "random",
+        start_points: int = 25000,
+        aka_dora: int = 3,
+        kuitan: bool = True,
+        allow_south_entry: bool = False,
         ai_opponents: list[dict] | None = None,
     ) -> PlaySessionOut:
         username = username.strip()
@@ -716,17 +771,39 @@ class MahjongAiLauncher:
             raise RuntimeError("username is required")
         if ai_level not in {"normal", "hard"}:
             raise RuntimeError("ai_level must be normal or hard")
-        if ai_level == "hard":
-            model_path = self.settings.mahjong_ai_root / "model" / "saved" / "discard-model" / "best.pt"
-            if not model_path.exists():
-                raise RuntimeError("hard 难度需要 Mahjong-AI/model/saved 权重文件，请先准备模型。")
+        if match_type not in {"tonpu", "hanchan"}:
+            raise RuntimeError("match_type must be tonpu or hanchan")
+        if seat not in {"random", "east", "south", "west", "north"}:
+            raise RuntimeError("seat is invalid")
+        if start_points < 10000 or start_points > 50000 or start_points % 100 != 0:
+            raise RuntimeError("start_points must be between 10000 and 50000 in steps of 100")
+        if aka_dora not in {0, 3}:
+            raise RuntimeError("aka_dora must be 0 or 3")
 
         with self._lock:
             self._validate_environment()
-            match = self._create_match(username, ai_level, ai_opponents)
+            match = self._create_match(
+                username=username,
+                ai_level=ai_level,
+                match_type=match_type,
+                seat=seat,
+                start_points=start_points,
+                aka_dora=aka_dora,
+                kuitan=kuitan,
+                allow_south_entry=match_type == "tonpu" and allow_south_entry,
+                ai_opponents=ai_opponents,
+            )
 
             self._stop_managed_processes()
-            self._processes = self._build_processes(ai_level)
+            self._processes = self._build_processes(
+                ai_level=ai_level,
+                match_type=match_type,
+                seat=seat,
+                start_points=start_points,
+                aka_dora=aka_dora,
+                kuitan=kuitan,
+                allow_south_entry=match_type == "tonpu" and allow_south_entry,
+            )
 
             for name in ("server", "websockify", "web"):
                 proc = self._processes[name]
@@ -868,9 +945,12 @@ class MahjongAiLauncher:
             )
 
     def export_match_events_jsonl(self, match_id: str) -> str:
+        from .review_engine import normalize_internal_match_events_for_mjai, serialize_mjai_jsonl
+
         with SessionLocal() as db:
             stmt = select(MatchEvent).where(MatchEvent.match_id == match_id).order_by(MatchEvent.seq.asc())
             events = db.scalars(stmt).all()
             if not events:
                 raise RuntimeError(f"no match events found for match_id={match_id}")
-            return "".join(json.dumps(event.payload_json, ensure_ascii=False) + "\n" for event in events)
+            normalized = normalize_internal_match_events_for_mjai([event.payload_json for event in events])
+            return serialize_mjai_jsonl(normalized)

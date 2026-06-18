@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mahjonglab.local/schemas/decision-context.v2.json",
+  "title": "DecisionContextV2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "review",
+    "decision",
+    "visible_state",
+    "engine_analysis",
+    "derived_facts",
+    "evidence_ledger"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "decision-context.v2"
+    },
+    "review": {
+      "type": "object"
+    },
+    "decision": {
+      "type": "object"
+    },
+    "visible_state": {
+      "type": "object"
+    },
+    "engine_analysis": {
+      "type": "object"
+    },
+    "derived_facts": {
+      "type": "object"
+    },
+    "evidence_ledger": {
+      "type": "array",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^[TEDL][1-9][0-9]*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "table",
+              "engine",
+              "derived",
+              "limitation"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "statement": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Statement",
+            "type": "string"
+          },
+          "data": {
+            "title": "Data",
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "statement"
+        ],
+        "title": "EvidenceItem",
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -63,7 +63,22 @@ class YakuList:
 
 class Yaku(object):
 
-    def __init__(self, hand_tiles, furo, agarihai, dora, ura_dora, bahai, menfon, tsumo, riichi, ippatsu, tokusyu=0, aka=True):
+    def __init__(
+        self,
+        hand_tiles,
+        furo,
+        agarihai,
+        dora,
+        ura_dora,
+        bahai,
+        menfon,
+        tsumo,
+        riichi,
+        ippatsu,
+        tokusyu=0,
+        aka=True,
+        allow_open_tanyao=True,
+    ):
         """
         tokusyu: 1=岭上开花、2=抢杠、3=海底
         """
@@ -80,6 +95,7 @@ class Yaku(object):
         self.dora = dora
         self.ura_dora = ura_dora
         self.has_aka = aka
+        self.allow_open_tanyao = allow_open_tanyao
         self.dora_count = 0
         self.ura_dora_count = 0
         self.aka_count = 0
@@ -119,6 +135,8 @@ class Yaku(object):
             return False
         if self.riichi or (self.tsumo and not self.kui) or self.tokusyu:
             return True
+        if self.kui and not self.allow_open_tanyao:
+            return False
         if isinstance(self.agari, str):
             x_s = list(map(lambda _: int(_, 16), self.agari.split(',')))
             for x in x_s:
@@ -415,7 +433,7 @@ class Yaku(object):
                 elif roto + ji == 14:
                     ret |= YakuList.HONROTO  # 混老头
                     han += 2
-            if roto + ji == 0:
+            if roto + ji == 0 and (not self.kui or self.allow_open_tanyao):
                 ret |= YakuList.TANYAO  # 断幺
                 han += 1
             if (man == 0) + (pin == 0) + (sou == 0) == 2:

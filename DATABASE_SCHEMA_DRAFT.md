@@ -82,7 +82,8 @@ match_results ─ optional → review_jobs
 - `tenhou_id`
 - `majsoul_url`
 - `upload_file`
-- `inline_json`
+- `inline_jsonl`
+- `inline_json`（仅兼容旧任务）
 
 ### 4.3 `match_status`
 
@@ -478,7 +479,7 @@ create table review_jobs (
     progress between 0 and 100
   ),
   constraint chk_review_jobs_source_type check (
-    source_type in ('internal_match', 'tenhou_url', 'tenhou_id', 'majsoul_url', 'upload_file', 'inline_json')
+    source_type in ('internal_match', 'tenhou_url', 'tenhou_id', 'majsoul_url', 'upload_file', 'inline_jsonl', 'inline_json')
   )
 );
 

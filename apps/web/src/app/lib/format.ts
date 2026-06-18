@@ -30,8 +30,8 @@ export function formatPlatform(platform?: string | null) {
 }
 
 export function formatSourceType(sourceType: string) {
-  if (sourceType === "inline_json") {
-    return "JSON";
+  if (sourceType === "inline_jsonl" || sourceType === "inline_json") {
+    return "JSONL";
   }
   if (sourceType === "upload_file") {
     return "文件";
